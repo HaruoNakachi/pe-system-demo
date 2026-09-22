@@ -390,6 +390,55 @@ h3 { font-size: 1rem; margin: 0 0 6px; }
 .notice-info { background: var(--info-bg); border: 1px solid var(--info-line); }
 .notice-ok { background: var(--ok-bg); border: 1px solid var(--ok-line); }
 
+/* ---------- 説明の開閉（details / summary） ----------
+ * 長い説明を既定で閉じ、見出しの操作で開閉する（改訂方針B）。
+ * JavaScript を増やさずキーボード操作と読み上げに対応させるため、
+ * 素の <details> / <summary> を使い、見た目だけをカードに馴染ませている。
+ * 開閉状態の記憶は js/app.js の「説明の開閉」の節（pe_demo_ui）が行う。
+ */
+
+.explain {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--tint);
+}
+
+.explain-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;          /* スマートフォンのタップ領域 */
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--accent-text);
+  cursor: pointer;
+  list-style: none;          /* 既定の三角印を消し、自前の記号に置き換える */
+}
+.explain-summary::-webkit-details-marker { display: none; }
+
+/* 開閉の記号。閉じているときは右向き、開いているときは下向き。 */
+.explain-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: 2px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+.explain[open] > .explain-summary::before { transform: rotate(45deg); }
+
+.explain-summary:hover { background: var(--hover-soft); }
+
+.explain-body { padding: 0 14px 12px; }
+.explain-body > :first-child { margin-top: 0; }
+.explain-body .notice { margin: 0; }
+.explain-body .hint + .hint { margin-top: 8px; }
+
 code {
   background: var(--subtle-bg);
   padding: 1px 5px;
@@ -423,7 +472,8 @@ textarea {
 }
 textarea { min-height: 60px; line-height: 1.6; resize: vertical; }
 
-input:focus, textarea:focus, button:focus-visible, a:focus-visible {
+input:focus, textarea:focus, button:focus-visible, a:focus-visible,
+summary:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 1px;
 }
@@ -651,6 +701,10 @@ input:focus, textarea:focus, button:focus-visible, a:focus-visible {
 .cert-list { margin: 4px 0 0; padding-left: 1.2em; font-size: 0.88rem; }
 .cert-list li { margin-bottom: 3px; }
 
+/* 本人評価と他者評価の差の一覧のスタイル。
+ * 病院内管理者の画面で使う。スタッフ画面には表示しない（改訂方針A）。
+ * 現在このクラスを使う要素は描画していないが、管理者の画面を作るときに
+ * そのまま再利用するため残している。 */
 .gap-list { list-style: none; margin: 10px 0 0; padding: 0; }
 .gap-item {
   border: 1px solid var(--line);

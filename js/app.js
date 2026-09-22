@@ -78,6 +78,82 @@
     }
   }
 
+  /* ---------------- 説明の開閉 ----------------
+   * 長い説明を既定で閉じ、見出し（summary）の操作で開閉する（改訂方針B）。
+   * 素の <details> / <summary> を使うため、開閉そのものに JavaScript は要らない。
+   * ここで行うのは「前回の開閉状態を思い出す」ことだけである。
+   *
+   * 保存先は仕様書9節にない一時的なキー pe_demo_ui。評価データとは独立させ、
+   * データリセットとシード版の不一致による初期化のどちらでも消さない（配色テーマと同じ扱い）。
+   * 読み書きはすべて try/catch で囲む。保存できない環境でも開閉そのものは動く。
+   */
+
+  var PE_UI_KEY = 'pe_demo_ui';
+
+  /* 既定はすべて閉じた状態。開いたものだけを { 開閉ID: true } で持つ。 */
+  var explainState = {};
+
+  function readExplainState() {
+    var raw = null;
+    try {
+      raw = window.localStorage.getItem(PE_UI_KEY);
+    } catch (e) {
+      raw = null;
+    }
+    var parsed = null;
+    try {
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      parsed = null;
+    }
+    var out = {};
+    if (parsed && typeof parsed === 'object' && parsed.explainOpen
+      && typeof parsed.explainOpen === 'object') {
+      for (var k in parsed.explainOpen) {
+        if (Object.prototype.hasOwnProperty.call(parsed.explainOpen, k)) {
+          out[k] = (parsed.explainOpen[k] === true);
+        }
+      }
+    }
+    return out;
+  }
+
+  function writeExplainState() {
+    try {
+      window.localStorage.setItem(PE_UI_KEY, JSON.stringify({ explainOpen: explainState }));
+    } catch (e) {
+      /* 保存できなくても開閉そのものは動く。評価データには影響しない。 */
+    }
+  }
+
+  /* 説明の開閉ブロックを組み立てる。
+   * summary には「何の説明か」が分かる見出しを入れる（「詳細」のような見出しにしない）。 */
+  function explainBlock(id, summary, bodyHtml) {
+    return '<details class="explain" data-explain="' + esc(id) + '"'
+      + (explainState[id] === true ? ' open' : '') + '>'
+      + '<summary class="explain-summary">' + esc(summary) + '</summary>'
+      + '<div class="explain-body">' + bodyHtml + '</div>'
+      + '</details>';
+  }
+
+  /* toggle イベントは伝播しないため、描画のたびに各 details へ直接付ける。 */
+  function bindExplain() {
+    var list = document.querySelectorAll('details[data-explain]');
+    for (var i = 0; i < list.length; i++) {
+      list[i].addEventListener('toggle', onExplainToggle, false);
+    }
+  }
+
+  function onExplainToggle(e) {
+    var el = e.currentTarget;
+    if (!el || !el.getAttribute) return;
+    var id = el.getAttribute('data-explain');
+    if (!id) return;
+    if (el.open) explainState[id] = true;
+    else delete explainState[id];
+    writeExplainState();
+  }
+
   /* ---------------- 共通ユーティリティ ---------------- */
 
   function $(sel) { return document.querySelector(sel); }
@@ -490,7 +566,6 @@
     var domains = PE_Scoring.domainScores(d.items, state.answers, state.otherAnswers);
     var selfTotal = PE_Scoring.weightedTotal(domains, 'self');
     var otherTotal = PE_Scoring.weightedTotal(domains, 'other');
-    var gapList = PE_Scoring.gaps(d.items, state.answers, state.otherAnswers);
     var challengeRoman = PE_Scoring.romanOf(state.profile.challengeLevel);
     var currentLevel = state.profile.challengeLevel - 1;
 
@@ -527,9 +602,10 @@
     /* レベル認定の判定 */
     html += '<section class="card">'
       + '<h2>レベル認定の判定</h2>'
-      + '<p class="hint">判定の対象は<strong>専門実践評価のみ</strong>です。基礎評価と各個人の目標はレベル認定に影響しません。'
-      + '判定には本人評価を用い、対象の実践例すべてに上位2段階（3・4）がついているかを見ます。'
-      + esc(licenseTermOf(d.items)) + 'は判定の対象から外し、担当外・観察機会なしの実践例は未達として扱いません。</p>';
+      + explainBlock('cert-criteria', 'レベル認定の判定基準について',
+        '<p class="hint">判定の対象は<strong>専門実践評価のみ</strong>です。基礎評価と各個人の目標はレベル認定に影響しません。'
+        + '判定には本人評価を用い、対象の実践例すべてに上位2段階（3・4）がついているかを見ます。'
+        + esc(licenseTermOf(d.items)) + 'は判定の対象から外し、担当外・観察機会なしの実践例は未達として扱いません。</p>');
 
     html += renderCertification(PE_Scoring.certification(d.items, state.answers, 'practice', PE_MASTER, state.profile));
 
@@ -560,6 +636,10 @@
         + '</tr>';
     }
     html += '</tbody></table></div>'
+      /* この注記は開いたままにする（改訂方針B）。初見で誤解を生み、
+       * 誤解の結果が制度への不信につながるため、<details> にしない。 */
+      + '<p class="notice notice-info">本人評価と他者評価に<strong>差があること自体は悪い評価ではありません。</strong>'
+      + '見え方の違いを確かめる手がかりとして使ってください。</p>'
       + '<p class="hint">平均は4点満点です。' + esc(licenseTermOf(d.items)) + 'と担当外・観察機会なしは分母から外しています。'
       + '有効な回答が0件の評価領域は「—」と表示します。</p>'
       + '</section>';
@@ -571,8 +651,9 @@
       + '<div class="total-box"><p class="level-caption">本人評価</p><p class="level-value">' + esc(fmtScore(selfTotal.value)) + '</p></div>'
       + '<div class="total-box"><p class="level-caption">他者評価</p><p class="level-value">' + esc(fmtScore(otherTotal.value)) + '</p></div>'
       + '</div>'
-      + '<p class="notice notice-warn">重みは 基礎評価50％／専門実践評価40％／各個人の目標10％です。'
-      + 'これは<strong>暫定値</strong>であり、試行運用の結果をふまえて確定します。</p>';
+      + explainBlock('weights', '重みの内訳について',
+        '<p class="notice notice-warn">重みは 基礎評価50％／専門実践評価40％／各個人の目標10％です。'
+        + 'これは<strong>暫定値</strong>であり、試行運用の結果をふまえて確定します。</p>');
     if (selfTotal.renormalized || otherTotal.renormalized) {
       var exc = selfTotal.excluded.concat(otherTotal.excluded).filter(function (v, idx, arr) { return arr.indexOf(v) === idx; });
       html += '<p class="hint">有効な回答が0件の評価領域（' + esc(exc.join('・')) + '）は重みごと除き、'
@@ -580,30 +661,10 @@
     }
     html += '</section>';
 
-    /* 面談で確認したいこと */
-    html += '<section class="card">'
-      + '<h2>面談で確認したいこと</h2>'
-      + '<p class="notice notice-info">本人評価と他者評価の評価基準が<strong>1つ以上違う項目</strong>を、面談のテーマ候補として並べています。'
-      + '<strong>差があること自体は悪い評価ではありません。</strong>認識をすり合わせる手がかりとして使ってください。</p>';
-    if (gapList.length === 0) {
-      html += '<p class="empty">該当する項目はありません（未回答の項目は対象外です）。</p>';
-    } else {
-      html += '<ul class="gap-list">';
-      for (var gi = 0; gi < gapList.length; gi++) {
-        var gp = gapList[gi];
-        html += '<li class="gap-item' + (gp.diff >= 2 ? ' gap-large' : '') + '">'
-          + '<p class="gap-meta">' + esc(gp.item.group.domainName)
-          + (gp.item.group.competencyName ? '｜' + esc(gp.item.group.competencyName) : '')
-          + (gp.item.group.parentKind === '基礎評価の項目' ? '｜' + esc(gp.item.group.parentName) : '')
-          + '</p>'
-          + '<p class="gap-text">' + esc(gp.item.text) + '</p>'
-          + '<p class="gap-scores">本人評価 <strong>' + gp.self + '</strong>／他者評価 <strong>' + gp.other + '</strong>'
-          + '（差 ' + gp.diff + '）</p>'
-          + '</li>';
-      }
-      html += '</ul>';
-    }
-    html += '</section>';
+    /* 本人評価と他者評価の差から自動抽出する一覧（従来の「面談で確認したいこと」）は、
+     * 病院内管理者の画面に置くものとする方針に変わったため、スタッフ画面から削除した（改訂方針A）。
+     * 抽出ロジックは PE_Scoring.gaps として js/scoring.js に残してある（呼び出さないだけである）。
+     * 領域別スコアの本人評価と他者評価の並記と、チャートの他者評価はスタッフ画面に残す。 */
 
     /* チャートは領域別スコアと同じ順（基礎評価 → 専門実践評価 → 各個人の目標）に並べる。
      * 軸の意味が違うため、3領域を1枚にまとめない。 */
@@ -611,16 +672,19 @@
     /* チャート：基礎評価（レベル軸を持たない／R26） */
     html += '<section class="card">'
       + '<h2>基礎評価の' + PE_MASTER.basicItems.length + 'つの項目</h2>'
-      + '<p class="hint">基礎評価の項目ごとに、本人評価と他者評価を重ねて表示しています。'
-      + '値はその項目に属する実践例の平均です。</p>'
+      + explainBlock('chart-basic', 'このチャートの見方と値の求め方について',
+        '<p class="hint">基礎評価の項目ごとに、本人評価と他者評価を重ねて表示しています。'
+        + '値はその項目に属する実践例の平均です。</p>'
+        + '<p class="hint">現在は各項目に実践例が1つずつのため、表示している値は平均ではなく評価基準の値そのものです。</p>')
       + '<div id="radar-basic" class="radar-wrap"></div>'
-      + '<p class="hint">現在は各項目に実践例が1つずつのため、表示している値は平均ではなく評価基準の値そのものです。</p>'
       + '</section>';
 
     /* チャート：実践ラダー（従来どおり） */
     html += '<section class="card">'
       + '<h2>実践ラダーの4つの力</h2>'
-      + '<p class="hint">チャレンジレベル（レベル' + esc(challengeRoman) + '）の実践例について、本人評価と他者評価を重ねて表示しています。</p>'
+      + explainBlock('chart-practice', 'このチャートの見方について',
+        '<p class="hint">チャレンジレベル（レベル' + esc(challengeRoman) + '）の実践例について、'
+        + '本人評価と他者評価を重ねて表示しています。</p>')
       + '<div id="radar" class="radar-wrap"></div>'
       + '</section>';
 
@@ -634,7 +698,8 @@
       html += '<section class="card">'
         + '<h2>' + esc(mgmt ? mgmt.name : 'マネジメントラダー') + 'の'
         + (mgmt ? mgmt.competencies.length : 0) + 'つの力</h2>'
-        + '<p class="hint">レベル' + esc(mgmtLevel) + 'の実践例について、本人評価と他者評価を重ねて表示しています。</p>'
+        + explainBlock('chart-management', 'このチャートの見方について',
+          '<p class="hint">レベル' + esc(mgmtLevel) + 'の実践例について、本人評価と他者評価を重ねて表示しています。</p>')
         + '<div id="radar-management" class="radar-wrap"></div>'
         + '</section>';
     }
@@ -642,7 +707,8 @@
     /* チャート：各個人の目標（実践例が少ないため横棒グラフ／R28） */
     html += '<section class="card">'
       + '<h2>各個人の目標の実践例</h2>'
-      + '<p class="hint">合意した目標の実践例ごとに、本人評価と他者評価を並べています。目盛は評価基準の1〜4です。</p>'
+      + explainBlock('chart-personal', 'この横棒グラフの見方と目盛について',
+        '<p class="hint">合意した目標の実践例ごとに、本人評価と他者評価を並べています。目盛は評価基準の1〜4です。</p>')
       + '<div id="bars-personal" class="radar-wrap"></div>'
       + '</section>';
 
@@ -719,6 +785,8 @@
   }
 
   function afterDashboard() {
+    bindExplain();
+
     var wrap = document.getElementById('radar');
     if (!wrap) return;
     var d = derived();
@@ -1004,6 +1072,8 @@
   function boot() {
     /* デモの見た目（比較用）：配色が決まったらこの1行を削除する */
     applyTheme(readTheme());
+    /* 説明の開閉：前回の開閉状態を読み込む（既定はすべて閉じた状態） */
+    explainState = readExplainState();
     initData();
     document.addEventListener('click', onClick, false);
     document.addEventListener('change', onChange, false);
