@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>動物病院 評価制度アプリ（デモ）</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="app-header-inner">
+    <p class="app-title">動物病院 評価制度アプリ<span class="app-badge">デモ</span></p>
+    <p class="demo-warning">これはデモです。実在するスタッフの情報を入力しないでください。</p>
+  </div>
+  <nav id="nav" class="app-nav" hidden></nav>
+</header>
+
+<div id="storage-banner" class="storage-banner" role="status" hidden></div>
+
+<main id="main" class="app-main"></main>
+
+<footer class="app-footer">
+  <p>デモ用のため、データはこのブラウザの localStorage にのみ保存されます。サーバへは送信しません。</p>
+  <p>ブラウザやプロファイルを変えるとデータは引き継がれません。表示されている氏名・評価はすべて架空のデモ用データです。</p>
+</footer>
+
+<script src="js/seed.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/scoring.js"></script>
+<script src="js/radar.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

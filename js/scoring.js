@@ -1,0 +1,349 @@
+/* scoring.js
+ * 回答対象の組み立て・集計・レベル認定の判定。
+ *
+ * 集計の約束
+ *  - 適用外（資格要件を満たさない実践例）は分母から外す。
+ *  - 担当外・観察機会なしは低評価と区別し、分母から外す。
+ *  - 有効な回答が0件の評価領域は平均を「—」とし、重み付き総合スコアからも外して
+ *    残りの重みを再正規化する。
+ */
+
+var PE_Scoring = (function () {
+
+  function romanOf(level) {
+    for (var i = 0; i < PE_LEVEL_DEFINITIONS.length; i++) {
+      if (PE_LEVEL_DEFINITIONS[i].level === level) return PE_LEVEL_DEFINITIONS[i].roman;
+    }
+    return String(level);
+  }
+
+  function levelDefinitionOf(level) {
+    for (var i = 0; i < PE_LEVEL_DEFINITIONS.length; i++) {
+      if (PE_LEVEL_DEFINITIONS[i].level === level) return PE_LEVEL_DEFINITIONS[i];
+    }
+    return null;
+  }
+
+  /* 回答対象の実践例を、親（基礎評価の項目／レベル毎の目標／合意した目標）ごとの
+   * グループとして組み立てる（R2）。 */
+  function buildGroups(master, profile) {
+    var groups = [];
+
+    /* 基礎評価：設定によらず常に全項目（R26） */
+    for (var i = 0; i < master.basicItems.length; i++) {
+      var bi = master.basicItems[i];
+      groups.push({
+        key: 'basic:' + bi.id,
+        domainId: 'basic',
+        domainName: '基礎評価',
+        parentKind: '基礎評価の項目',
+        parentName: bi.name,
+        parentText: '',
+        ladderId: null,
+        ladderName: null,
+        competencyId: null,
+        competencyName: null,
+        level: null,
+        requiresLicense: false,
+        notApplicable: false,
+        items: bi.practiceItems.map(function (pi) {
+          return {
+            id: pi.id, text: pi.text, source: pi.source,
+            domainId: 'basic', ladderId: null, competencyId: null,
+            level: null, notApplicable: false
+          };
+        })
+      });
+    }
+
+    /* 専門実践評価：チャレンジレベル1レベル分（R4） */
+    for (var l = 0; l < master.ladders.length; l++) {
+      var ladder = master.ladders[l];
+      if (ladder.id === 'management' && !profile.managementLadder) continue;
+      var targetLevel = (ladder.fixedLevel === null || ladder.fixedLevel === undefined)
+        ? profile.challengeLevel : ladder.fixedLevel;
+
+      for (var c = 0; c < ladder.competencies.length; c++) {
+        var comp = ladder.competencies[c];
+        for (var g = 0; g < comp.levelGoals.length; g++) {
+          var goal = comp.levelGoals[g];
+          if (goal.level !== targetLevel) continue;
+          var na = !!(goal.requiresLicense && !profile.hasLicense);
+          (function (ladder, comp, goal, na) {
+            groups.push({
+              key: 'prof:' + ladder.id + ':' + comp.id + ':' + goal.level,
+              domainId: 'professional',
+              domainName: '専門実践評価',
+              parentKind: 'レベル毎の目標',
+              parentName: ladder.name + '｜' + comp.name + '｜レベル' + romanOf(goal.level),
+              parentText: goal.text,
+              ladderId: ladder.id,
+              ladderName: ladder.name,
+              competencyId: comp.id,
+              competencyName: comp.name,
+              level: goal.level,
+              requiresLicense: !!goal.requiresLicense,
+              notApplicable: na,
+              items: goal.practiceItems.map(function (pi) {
+                return {
+                  id: pi.id, text: pi.text, source: pi.source,
+                  domainId: 'professional', ladderId: ladder.id, competencyId: comp.id,
+                  level: goal.level, notApplicable: na
+                };
+              })
+            });
+          })(ladder, comp, goal, na);
+        }
+      }
+    }
+
+    /* 各個人の目標（R28） */
+    for (var p = 0; p < master.personalGoals.length; p++) {
+      var pg = master.personalGoals[p];
+      groups.push({
+        key: 'personal:' + pg.id,
+        domainId: 'personal',
+        domainName: '各個人の目標',
+        parentKind: '合意した目標',
+        parentName: '合意した目標',
+        parentText: pg.text,
+        ladderId: null,
+        ladderName: null,
+        competencyId: null,
+        competencyName: null,
+        level: null,
+        requiresLicense: false,
+        notApplicable: false,
+        items: pg.practiceItems.map(function (pi) {
+          return {
+            id: pi.id, text: pi.text, source: pi.source,
+            domainId: 'personal', ladderId: null, competencyId: null,
+            level: null, notApplicable: false
+          };
+        })
+      });
+    }
+
+    return groups;
+  }
+
+  function flatten(groups) {
+    var out = [];
+    for (var i = 0; i < groups.length; i++) {
+      for (var j = 0; j < groups[i].items.length; j++) {
+        var item = groups[i].items[j];
+        item.group = groups[i];
+        out.push(item);
+      }
+    }
+    return out;
+  }
+
+  function answerOf(answers, id) {
+    var a = answers[id];
+    if (!a) return { score: null, na: false, note: '' };
+    return {
+      score: (typeof a.score === 'number') ? a.score : null,
+      na: !!a.na,
+      note: a.note || ''
+    };
+  }
+
+  /* 進捗：適用外は対象数から除く */
+  function progress(items, answers) {
+    var total = 0, answered = 0;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].notApplicable) continue;
+      total++;
+      var a = answerOf(answers, items[i].id);
+      if (a.na || a.score !== null) answered++;
+    }
+    return { answered: answered, total: total };
+  }
+
+  /* 領域別スコア。本人評価・他者評価の両方を算出する。 */
+  function domainScores(items, answers, otherAnswers) {
+    var acc = {};
+    for (var d = 0; d < PE_DOMAINS.length; d++) {
+      acc[PE_DOMAINS[d].id] = {
+        id: PE_DOMAINS[d].id, name: PE_DOMAINS[d].name, weight: PE_DOMAINS[d].weight,
+        selfSum: 0, selfCount: 0, otherSum: 0, otherCount: 0,
+        notApplicableCount: 0, unobservedCount: 0, unansweredCount: 0, targetCount: 0
+      };
+    }
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var a = acc[it.domainId];
+      if (!a) continue;
+      if (it.notApplicable) { a.notApplicableCount++; continue; }
+      a.targetCount++;
+      var ans = answerOf(answers, it.id);
+      if (ans.na) {
+        a.unobservedCount++;
+      } else if (ans.score !== null) {
+        a.selfSum += ans.score; a.selfCount++;
+        var other = otherAnswers[it.id];
+        if (typeof other === 'number') { a.otherSum += other; a.otherCount++; }
+      } else {
+        a.unansweredCount++;
+      }
+    }
+    var list = [];
+    for (var k = 0; k < PE_DOMAINS.length; k++) {
+      var x = acc[PE_DOMAINS[k].id];
+      x.selfAverage = x.selfCount > 0 ? (x.selfSum / x.selfCount) : null;
+      x.otherAverage = x.otherCount > 0 ? (x.otherSum / x.otherCount) : null;
+      list.push(x);
+    }
+    return list;
+  }
+
+  /* 重み付き総合スコア。有効回答0件の領域は重みごと除き、残りを再正規化する。 */
+  function weightedTotal(domainList, which) {
+    var key = which === 'other' ? 'otherAverage' : 'selfAverage';
+    var sum = 0, weightSum = 0, excluded = [];
+    for (var i = 0; i < domainList.length; i++) {
+      var d = domainList[i];
+      if (d[key] === null) { excluded.push(d.name); continue; }
+      sum += d[key] * d.weight;
+      weightSum += d.weight;
+    }
+    return {
+      value: weightSum > 0 ? (sum / weightSum) : null,
+      usedWeight: weightSum,
+      excluded: excluded,
+      renormalized: weightSum > 0 && weightSum < 100
+    };
+  }
+
+  /* レベル認定の判定。実践ラダーとマネジメントラダーを別々に判定する（R20）。
+   * 対象は専門実践評価のみ（R21・R27）。判定に使うのは本人評価。 */
+  function certification(items, answers, ladderId, master, profile) {
+    var ladder = null;
+    for (var i = 0; i < master.ladders.length; i++) {
+      if (master.ladders[i].id === ladderId) ladder = master.ladders[i];
+    }
+    var targetLevel = (!ladder || ladder.fixedLevel === null || ladder.fixedLevel === undefined)
+      ? profile.challengeLevel : ladder.fixedLevel;
+
+    var met = [], notMet = [], undecidable = [], unanswered = [], notApplicable = [];
+    for (var j = 0; j < items.length; j++) {
+      var it = items[j];
+      if (it.domainId !== 'professional' || it.ladderId !== ladderId) continue;
+      if (it.notApplicable) { notApplicable.push(it); continue; }
+      var a = answerOf(answers, it.id);
+      if (a.na) { undecidable.push(it); continue; }
+      if (a.score === null) { unanswered.push(it); continue; }
+      if (a.score >= 3) met.push(it); else notMet.push(it);
+    }
+
+    var targetCount = met.length + notMet.length + undecidable.length + unanswered.length;
+    var status, message;
+    if (targetCount === 0) {
+      status = 'none';
+      message = notApplicable.length > 0
+        ? '対象の実践例がすべて適用外のため、判定の対象がありません。'
+        : '判定の対象となる実践例がありません。';
+    } else if (unanswered.length > 0) {
+      status = 'pending';
+      message = '未回答の実践例があるため、判定を保留しています。';
+    } else if (notMet.length > 0) {
+      status = 'notMet';
+      message = '上位2段階（3・4）がついていない実践例があるため、認定の要件を満たしていません。';
+    } else if (undecidable.length > 0) {
+      status = 'pending';
+      message = '担当外・観察機会なしの実践例があるため、判定を保留しています（未達としては扱いません）。';
+    } else {
+      status = 'met';
+      message = '対象の実践例すべてに上位2段階（3・4）がついており、認定の要件を満たしています。';
+    }
+
+    return {
+      ladderId: ladderId,
+      ladderName: ladder ? ladder.name : ladderId,
+      level: targetLevel,
+      levelRoman: romanOf(targetLevel),
+      status: status,
+      message: message,
+      met: met, notMet: notMet, undecidable: undecidable,
+      unanswered: unanswered, notApplicable: notApplicable
+    };
+  }
+
+  /* 本人評価と他者評価の差。評価基準が1つ以上違う項目を返す（FR-14）。 */
+  function gaps(items, answers, otherAnswers) {
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.notApplicable) continue;
+      var a = answerOf(answers, it.id);
+      if (a.na || a.score === null) continue;
+      var other = otherAnswers[it.id];
+      if (typeof other !== 'number') continue;
+      var diff = Math.abs(a.score - other);
+      if (diff >= 1) {
+        out.push({ item: it, self: a.score, other: other, diff: diff });
+      }
+    }
+    out.sort(function (x, y) { return y.diff - x.diff; });
+    return out;
+  }
+
+  /* 実践ラダーの4つの力のレーダーチャート用データ */
+  function radarAxes(items, answers, otherAnswers, master) {
+    var practice = null;
+    for (var i = 0; i < master.ladders.length; i++) {
+      if (master.ladders[i].id === 'practice') practice = master.ladders[i];
+    }
+    var axes = [];
+    if (!practice) return axes;
+    for (var c = 0; c < practice.competencies.length; c++) {
+      var comp = practice.competencies[c];
+      var selfSum = 0, selfCount = 0, otherSum = 0, otherCount = 0;
+      var state = 'unanswered';
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        if (it.ladderId !== 'practice' || it.competencyId !== comp.id) continue;
+        if (it.notApplicable) { state = 'notApplicable'; continue; }
+        var a = answerOf(answers, it.id);
+        if (a.na) { if (state !== 'answered') state = 'unobserved'; continue; }
+        if (a.score === null) continue;
+        state = 'answered';
+        selfSum += a.score; selfCount++;
+        var other = otherAnswers[it.id];
+        if (typeof other === 'number') { otherSum += other; otherCount++; }
+      }
+      axes.push({
+        label: comp.name,
+        state: state,
+        self: selfCount > 0 ? selfSum / selfCount : null,
+        other: otherCount > 0 ? otherSum / otherCount : null
+      });
+    }
+    return axes;
+  }
+
+  function counts(items, answers) {
+    var notApplicable = 0, unobserved = 0;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].notApplicable) { notApplicable++; continue; }
+      if (answerOf(answers, items[i].id).na) unobserved++;
+    }
+    return { notApplicable: notApplicable, unobserved: unobserved };
+  }
+
+  return {
+    romanOf: romanOf,
+    levelDefinitionOf: levelDefinitionOf,
+    buildGroups: buildGroups,
+    flatten: flatten,
+    answerOf: answerOf,
+    progress: progress,
+    domainScores: domainScores,
+    weightedTotal: weightedTotal,
+    certification: certification,
+    gaps: gaps,
+    radarAxes: radarAxes,
+    counts: counts
+  };
+})();
