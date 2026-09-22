@@ -24,6 +24,23 @@ var PE_Scoring = (function () {
     return null;
   }
 
+  /* 画面表記のための補助。
+   * 内部の区分名は「適用外」のままで、集計・判定は一切これを見ない。
+   * 画面には資格名を動的に埋め込んだ「要資格（○○）項目」と表示する。 */
+  function licenseNamesOf(items) {
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      var n = items[i] && items[i].licenseName;
+      if (n && out.indexOf(n) === -1) out.push(n);
+    }
+    return out;
+  }
+
+  function licenseTerm(names) {
+    var list = (names && names.length) ? names.join('・') : '';
+    return list ? '要資格（' + list + '）項目' : '要資格項目';
+  }
+
   /* 回答対象の実践例を、親（基礎評価の項目／レベル毎の目標／合意した目標）ごとの
    * グループとして組み立てる（R2）。 */
   function buildGroups(master, profile) {
@@ -69,7 +86,9 @@ var PE_Scoring = (function () {
           var goal = comp.levelGoals[g];
           if (goal.level !== targetLevel) continue;
           var na = !!(goal.requiresLicense && !profile.hasLicense);
-          (function (ladder, comp, goal, na) {
+          /* 資格名は画面表記にのみ使う。判定には使わない。 */
+          var licenseName = goal.requiresLicense ? (goal.licenseName || '') : '';
+          (function (ladder, comp, goal, na, licenseName) {
             groups.push({
               key: 'prof:' + ladder.id + ':' + comp.id + ':' + goal.level,
               domainId: 'professional',
@@ -83,16 +102,17 @@ var PE_Scoring = (function () {
               competencyName: comp.name,
               level: goal.level,
               requiresLicense: !!goal.requiresLicense,
+              licenseName: licenseName,
               notApplicable: na,
               items: goal.practiceItems.map(function (pi) {
                 return {
                   id: pi.id, text: pi.text, source: pi.source,
                   domainId: 'professional', ladderId: ladder.id, competencyId: comp.id,
-                  level: goal.level, notApplicable: na
+                  level: goal.level, notApplicable: na, licenseName: licenseName
                 };
               })
             });
-          })(ladder, comp, goal, na);
+          })(ladder, comp, goal, na, licenseName);
         }
       }
     }
@@ -242,7 +262,7 @@ var PE_Scoring = (function () {
     if (targetCount === 0) {
       status = 'none';
       message = notApplicable.length > 0
-        ? '対象の実践例がすべて適用外のため、判定の対象がありません。'
+        ? '対象の実践例がすべて' + licenseTerm(licenseNamesOf(notApplicable)) + 'のため、判定の対象がありません。'
         : '判定の対象となる実践例がありません。';
     } else if (unanswered.length > 0) {
       status = 'pending';
@@ -335,6 +355,8 @@ var PE_Scoring = (function () {
   return {
     romanOf: romanOf,
     levelDefinitionOf: levelDefinitionOf,
+    licenseNamesOf: licenseNamesOf,
+    licenseTerm: licenseTerm,
     buildGroups: buildGroups,
     flatten: flatten,
     answerOf: answerOf,

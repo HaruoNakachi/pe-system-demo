@@ -106,6 +106,14 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v).trim());
   }
 
+  /* 画面表記：内部の区分名「適用外」は、画面上は「要資格（○○）項目」と表示する。
+   * ○○はレベル毎の目標が持つ資格要件（licenseName）から動的に組み立てる。
+   * 幅の狭い箇所（バッジ・レーダーチャートの軸注記）では短縮形「要資格」を使い、
+   * 同じ画面に資格名を含む正式表記が出るようにしている。 */
+  function licenseTermOf(items) {
+    return PE_Scoring.licenseTerm(PE_Scoring.licenseNamesOf(items || []));
+  }
+
   /* ---------------- 初期化 ---------------- */
 
   function initData() {
@@ -310,7 +318,7 @@
       + '<p class="lead">評価期間：' + esc(PE_MASTER.period) + '</p>'
       + '<div class="progress-box">'
       + '<p class="progress-text">回答済み <strong>' + prog.answered + '</strong> ／ 対象 <strong>' + prog.total + '</strong>'
-      + '（適用外の' + cnt.notApplicable + '件は対象数から除いています）</p>'
+      + '（' + esc(licenseTermOf(d.items)) + 'の' + cnt.notApplicable + '件は対象数から除いています）</p>'
       + '<div class="progress-bar"><span style="width:' + (prog.total ? Math.round(prog.answered / prog.total * 100) : 0) + '%"></span></div>'
       + '<p class="limit-note">3領域の合計は <strong>' + totalTarget + '項目</strong>です。'
       + '1回の評価で回答する実践例は<strong>20項目以内</strong>に収める決まりで、'
@@ -366,9 +374,13 @@
         + '<p class="group-kind">レベル毎の目標</p>'
         + '<h3 class="group-title">' + esc(grp.parentText) + '</h3>';
       if (grp.requiresLicense) {
-        head += '<p class="license-note">資格要件：愛玩動物看護師'
-          + (grp.notApplicable ? '（資格なしのため、この目標に紐づく実践例は適用外です）' : '')
-          + '</p>';
+        if (grp.notApplicable) {
+          head += '<p class="license-note">'
+            + esc(PE_Scoring.licenseTerm(grp.licenseName ? [grp.licenseName] : []))
+            + '：資格がないと担当できない業務です。評価の対象から外し、平均点の計算にも含めません。</p>';
+        } else {
+          head += '<p class="license-note">資格要件：' + esc(grp.licenseName) + '</p>';
+        }
       }
     } else {
       head = '<p class="group-kind">合意した目標</p><h3 class="group-title">' + esc(grp.parentText) + '</h3>';
@@ -387,8 +399,9 @@
     html += '<p class="item-text">' + esc(item.text) + '</p>';
 
     if (item.notApplicable) {
-      html += '<p class="badge badge-na">適用外（資格要件を満たさないため、未達として集計しません）</p>';
-      html += '<p class="hint">適用外は選択肢ではなく、資格要件から自動で判定しています。読み取り専用です。</p>';
+      html += '<p class="badge badge-na">要資格</p>';
+      html += '<p class="hint">' + esc(PE_Scoring.licenseTerm(item.licenseName ? [item.licenseName] : []))
+        + 'のため、回答は不要です。資格要件から自動で判定しています。</p>';
       html += '</div>';
       return html;
     }
@@ -457,8 +470,8 @@
       + '<dt>提出日時</dt><dd>' + esc(fmtDateTime(state.submitted.at)) + '</dd>'
       + '<dt>評価期間</dt><dd>' + esc(PE_MASTER.period) + '</dd>'
       + '<dt>回答件数</dt><dd>' + prog.answered + '件 ／ 対象 ' + prog.total + '件</dd>'
-      + '<dt>適用外</dt><dd>' + cnt.notApplicable + '件（対象数から除いています）</dd>'
-      + '<dt>担当外・観察機会なし</dt><dd>' + cnt.unobserved + '件（低評価とは区別しています）</dd>'
+      + '<dt>' + esc(licenseTermOf(d.items)) + '</dt><dd>' + cnt.notApplicable + '件（評価の対象から外しています）</dd>'
+      + '<dt>担当外・観察機会なし</dt><dd>' + cnt.unobserved + '件（評価の対象から外しています）</dd>'
       + '</dl>'
       + '<p class="hint">提出後も回答内容は保持されます。評価入力の画面から再編集できます。</p>'
       + '<div class="btn-row">'
@@ -516,7 +529,7 @@
       + '<h2>レベル認定の判定</h2>'
       + '<p class="hint">判定の対象は<strong>専門実践評価のみ</strong>です。基礎評価と各個人の目標はレベル認定に影響しません。'
       + '判定には本人評価を用い、対象の実践例すべてに上位2段階（3・4）がついているかを見ます。'
-      + '適用外の実践例は判定の対象から外し、担当外・観察機会なしの実践例は未達として扱いません。</p>';
+      + esc(licenseTermOf(d.items)) + 'は判定の対象から外し、担当外・観察機会なしの実践例は未達として扱いません。</p>';
 
     html += renderCertification(PE_Scoring.certification(d.items, state.answers, 'practice', PE_MASTER, state.profile));
 
@@ -547,7 +560,7 @@
         + '</tr>';
     }
     html += '</tbody></table></div>'
-      + '<p class="hint">平均は4点満点です。適用外と担当外・観察機会なしは分母から外しています。'
+      + '<p class="hint">平均は4点満点です。' + esc(licenseTermOf(d.items)) + 'と担当外・観察機会なしは分母から外しています。'
       + '有効な回答が0件の評価領域は「—」と表示します。</p>'
       + '</section>';
 
@@ -599,18 +612,19 @@
       + '<div id="radar" class="radar-wrap"></div>'
       + '</section>';
 
-    /* 適用外・担当外の件数 */
+    /* 適用外・担当外の件数（画面表記は「要資格（○○）項目」） */
+    var naTerm = licenseTermOf(d.items);
     html += '<section class="card">'
-      + '<h2>適用外・担当外の件数</h2>'
+      + '<h2>' + esc(naTerm) + '・担当外の件数</h2>'
       + '<div class="table-wrap"><table class="table">'
       + '<thead><tr><th>区分</th><th>件数</th><th>集計での扱い</th></tr></thead><tbody>'
-      + '<tr><td>適用外（資格要件を満たさない）</td><td class="num">' + cnt.notApplicable + '</td>'
-      + '<td>構造的に到達し得ないため、分母から外しています。低評価ではありません。</td></tr>'
+      + '<tr><td>' + esc(naTerm) + '</td><td class="num">' + cnt.notApplicable + '</td>'
+      + '<td>資格がないと担当できない業務です。評価の対象から外し、平均点の計算にも含めません。</td></tr>'
       + '<tr><td>担当外・観察機会なし</td><td class="num">' + cnt.unobserved + '</td>'
-      + '<td>運用上たまたま機会がなかったものとして、分母から外しています。低評価ではありません。</td></tr>'
+      + '<td>今期は担当する機会がなかった項目です。評価の対象から外し、平均点の計算にも含めません。</td></tr>'
       + '</tbody></table></div>'
-      + '<p class="hint">適用外と担当外・観察機会なしは別の区分です。適用外は資格要件から自動で判定し、'
-      + '担当外・観察機会なしは本人が選びます。</p>'
+      + '<p class="hint">どちらも「できていない」とは扱いません。'
+      + esc(naTerm) + 'は資格要件から自動で判定し、担当外・観察機会なしは本人が選びます。</p>'
       + '</section>';
 
     return html;
@@ -651,7 +665,9 @@
       html += '</ul>';
     }
     if (cert.notApplicable.length > 0) {
-      html += '<p class="cert-list-title">適用外（判定の対象から外しています）</p><ul class="cert-list">';
+      html += '<p class="cert-list-title">'
+        + esc(PE_Scoring.licenseTerm(PE_Scoring.licenseNamesOf(cert.notApplicable)))
+        + '（判定の対象から外しています）</p><ul class="cert-list">';
       for (var m = 0; m < cert.notApplicable.length; m++) {
         html += '<li>' + esc(cert.notApplicable[m].group.competencyName) + '：' + esc(cert.notApplicable[m].text) + '</li>';
       }
@@ -734,7 +750,7 @@
       + '<p class="notice notice-info">この設定画面は<strong>デモ専用</strong>です。'
       + '本番ではマネジメントラダーの選択とチャレンジレベルは面談で決めます。'
       + '設定を変えると、回答対象とダッシュボードの表示がその場で切り替わります。</p>'
-      + '<p class="progress-text">現在の回答対象：' + prog.total + '項目（適用外を除く）</p>'
+      + '<p class="progress-text">現在の回答対象：' + prog.total + '項目（' + esc(licenseTermOf(d.items)) + 'を除く）</p>'
       + '</section>';
 
     html += '<section class="card">'
@@ -754,7 +770,8 @@
       + segButton('license', 'false', 'なし', state.profile.hasLicense === false)
       + '</div>'
       + '<p class="hint">資格を「なし」にすると、資格要件を持つレベル毎の目標（ケアする力）に紐づく実践例が'
-      + '<strong>適用外</strong>になります。適用外は選択できず、分母から外れます（R6）。</p>'
+      + '<strong>' + esc(licenseTermOf(d.items)) + '</strong>になります。回答はできず、'
+      + '評価の対象から外れます（R6）。</p>'
       + '</section>';
 
     html += '<section class="card">'
@@ -914,7 +931,7 @@
     var bar = document.querySelector('.progress-bar span');
     if (text) {
       text.innerHTML = '回答済み <strong>' + prog.answered + '</strong> ／ 対象 <strong>' + prog.total + '</strong>'
-        + '（適用外の' + cnt.notApplicable + '件は対象数から除いています）';
+        + '（' + esc(licenseTermOf(d.items)) + 'の' + cnt.notApplicable + '件は対象数から除いています）';
     }
     if (bar) bar.style.width = (prog.total ? Math.round(prog.answered / prog.total * 100) : 0) + '%';
   }

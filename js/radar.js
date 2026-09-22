@@ -135,7 +135,8 @@ var PE_Radar = (function () {
           'text-anchor': anchor,
           class: 'radar-label radar-label-note'
         });
-        note.textContent = axes[n].state === 'notApplicable' ? '（適用外）'
+        /* 幅が狭いため短縮形。資格名を含む正式表記は同じ画面の件数表に出る。 */
+        note.textContent = axes[n].state === 'notApplicable' ? '（要資格）'
           : (axes[n].state === 'unobserved' ? '（担当外・観察機会なし）' : '（未回答）');
         svg.appendChild(note);
       }

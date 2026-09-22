@@ -73,7 +73,10 @@ var PE_MASTER = {
     }
   ],
 
-  /* 専門実践評価：ラダー → 力 → レベル毎の目標 → 実践例 */
+  /* 専門実践評価：ラダー → 力 → レベル毎の目標 → 実践例
+   * requiresLicense: true のレベル毎の目標には licenseName（資格名）を持たせる。
+   * 画面表記の「要資格（○○）項目」はこの licenseName から組み立てる。
+   * 内部の区分名は「適用外」のままである（集計・判定のロジックは licenseName を見ない）。 */
   ladders: [
     {
       id: 'practice',
@@ -119,28 +122,28 @@ var PE_MASTER = {
           id: 'care', name: 'ケアする力',
           levelGoals: [
             {
-              level: 1, requiresLicense: true, source: 'supplement',
+              level: 1, requiresLicense: true, licenseName: '愛玩動物看護師', source: 'supplement',
               text: '指導者の助言を得ながら、標準的な手順に沿って診療の補助を実施できる',
               practiceItems: [
                 { id: 'pp_care_1', source: 'supplement', text: '指導者の立ち会いのもとで、標準的な手順に沿って静脈留置を実施できる' }
               ]
             },
             {
-              level: 2, requiresLicense: true, source: 'spec',
+              level: 2, requiresLicense: true, licenseName: '愛玩動物看護師', source: 'spec',
               text: '標準的な手順に基づき、指示の下で自立して診療の補助を実施できる',
               practiceItems: [
                 { id: 'pp_care_2', source: 'spec', text: '標準的な手順に沿って、静脈留置を一人で実施できる' }
               ]
             },
             {
-              level: 3, requiresLicense: true, source: 'supplement',
+              level: 3, requiresLicense: true, licenseName: '愛玩動物看護師', source: 'supplement',
               text: '個体の状態に応じて手順や方法を調整し、診療の補助を実施できる',
               practiceItems: [
                 { id: 'pp_care_3', source: 'supplement', text: '静脈留置が難しい個体について、保定の仕方や部位の選び方を状態に合わせて変更し実施している' }
               ]
             },
             {
-              level: 4, requiresLicense: true, source: 'supplement',
+              level: 4, requiresLicense: true, licenseName: '愛玩動物看護師', source: 'supplement',
               text: '起こりうる負担や合併症を予測し、悪化する前に手を打って診療の補助を実施できる',
               practiceItems: [
                 { id: 'pp_care_4', source: 'supplement', text: '処置中に起こりうる状態の悪化を予測し、悪化する前に獣医師へ相談して対応を変更している' }
