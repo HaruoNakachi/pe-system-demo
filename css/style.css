@@ -680,6 +680,16 @@ input:focus, textarea:focus, button:focus-visible, a:focus-visible {
 .radar-self-dot { fill: var(--self); }
 .radar-other-dot { fill: var(--other); }
 
+/* 横棒グラフ（各個人の目標）。色と凡例はレーダーチャートと共通。 */
+.bar-svg { max-width: 440px; }
+.bar-grid { stroke: var(--radar-grid); stroke-width: 1; }
+.bar-label { font-size: 11px; fill: var(--radar-label); }
+.bar-note { font-size: 10px; fill: var(--radar-note); }
+.bar-value { font-size: 10px; fill: var(--radar-tick); }
+.bar-shape { stroke-width: 2; }
+.bar-self { fill: var(--self-fill-2); stroke: var(--self); }
+.bar-other { fill: var(--other-fill-2); stroke: var(--other); stroke-dasharray: 5 3; }
+
 .radar-legend {
   display: flex;
   justify-content: center;

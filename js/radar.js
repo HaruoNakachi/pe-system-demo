@@ -1,6 +1,7 @@
 /* radar.js
- * 自前の SVG によるレーダーチャート。外部ライブラリは使用しない。
+ * 自前の SVG によるレーダーチャートと横棒グラフ。外部ライブラリは使用しない。
  * axes: [{ label, self, other, state }] / 値域は 1〜4（評価基準）。
+ * bars: [{ label, self, other, state }] / 同じ値域。実践例1つにつき1本組。
  */
 
 var PE_Radar = (function () {
@@ -51,7 +52,8 @@ var PE_Radar = (function () {
     }
   }
 
-  function render(container, axes) {
+  /* options.ariaLabel を渡さない場合の文言は従来どおり（実践ラダーの呼び出しは変えていない）。 */
+  function render(container, axes, options) {
     container.innerHTML = '';
     if (!axes || axes.length < 3) {
       container.textContent = 'レーダーチャートを表示できません。';
@@ -63,7 +65,9 @@ var PE_Radar = (function () {
     var svg = el('svg', {
       viewBox: '0 0 ' + W + ' ' + H,
       role: 'img',
-      'aria-label': '実践ラダーの4つの力についての本人評価と他者評価のレーダーチャート',
+      'aria-label': (options && options.ariaLabel)
+        ? options.ariaLabel
+        : '実践ラダーの4つの力についての本人評価と他者評価のレーダーチャート',
       class: 'radar-svg'
     });
 
@@ -143,7 +147,10 @@ var PE_Radar = (function () {
     }
 
     container.appendChild(svg);
+    appendLegend(container);
+  }
 
+  function appendLegend(container) {
     var legend = document.createElement('div');
     legend.className = 'radar-legend';
     legend.innerHTML =
@@ -152,5 +159,118 @@ var PE_Radar = (function () {
     container.appendChild(legend);
   }
 
-  return { render: render };
+  function stateNote(state) {
+    if (state === 'notApplicable') return '（要資格）';
+    if (state === 'unobserved') return '（担当外・観察機会なし）';
+    return '（未回答）';
+  }
+
+  /* 長い実践例の文言は行で折り返し、収まらない分は「…」で省略する。
+     全文は <title> で読めるようにする。 */
+  function wrapLabel(text, perLine, maxLines) {
+    var lines = [];
+    var rest = String(text === null || text === undefined ? '' : text);
+    while (rest.length > 0 && lines.length < maxLines) {
+      if (lines.length === maxLines - 1 && rest.length > perLine) {
+        lines.push(rest.slice(0, perLine - 1) + '…');
+        rest = '';
+      } else {
+        lines.push(rest.slice(0, perLine));
+        rest = rest.slice(perLine);
+      }
+    }
+    return lines;
+  }
+
+  /* 横棒グラフ。実践例が2つしかなくレーダーでは多角形にならない
+     「各個人の目標」のために用意している。値域・色・凡例はレーダーと揃える。
+     値のない棒（適用外・担当外・観察機会なし・未回答）は描かず、理由を文字で示す。 */
+  function renderBars(container, bars, options) {
+    container.innerHTML = '';
+    if (!bars || bars.length === 0) {
+      container.textContent = '表示できる実践例がありません。';
+      return;
+    }
+
+    var W = 440, max = 4;
+    var padX = 10, valueW = 26, axisTop = 18, barH = 15, barGap = 6;
+    var trackX = padX, trackW = W - padX * 2 - valueW;
+    var perLine = 34, maxLines = 2;
+
+    var blocks = [];
+    var y = axisTop;
+    for (var i = 0; i < bars.length; i++) {
+      var lines = wrapLabel(bars[i].label, perLine, maxLines);
+      var labelH = lines.length * 14;
+      var bodyH = (typeof bars[i].self === 'number' || typeof bars[i].other === 'number')
+        ? (barH * 2 + barGap) : 16;
+      blocks.push({ y: y, lines: lines, labelH: labelH, bodyH: bodyH });
+      y += labelH + 6 + bodyH + 16;
+    }
+    var H = y;
+
+    var svg = el('svg', {
+      viewBox: '0 0 ' + W + ' ' + H,
+      role: 'img',
+      'aria-label': (options && options.ariaLabel)
+        ? options.ariaLabel
+        : '実践例ごとの本人評価と他者評価の横棒グラフ',
+      class: 'radar-svg bar-svg'
+    });
+
+    /* 目盛（1〜4） */
+    for (var t = 1; t <= max; t++) {
+      var gx = trackX + trackW * (t / max);
+      svg.appendChild(el('line', {
+        x1: gx.toFixed(1), y1: axisTop - 6, x2: gx.toFixed(1), y2: (H - 6).toFixed(1), class: 'bar-grid'
+      }));
+      var tick = el('text', { x: gx.toFixed(1), y: axisTop - 9, 'text-anchor': 'middle', class: 'radar-tick' });
+      tick.textContent = String(t);
+      svg.appendChild(tick);
+    }
+
+    for (var b = 0; b < bars.length; b++) {
+      var bar = bars[b];
+      var blk = blocks[b];
+      var g = el('g', {});
+      var title = el('title', {});
+      title.textContent = bar.label;
+      g.appendChild(title);
+
+      for (var n = 0; n < blk.lines.length; n++) {
+        var lab = el('text', { x: trackX, y: blk.y + 11 + n * 14, class: 'bar-label' });
+        lab.textContent = blk.lines[n];
+        g.appendChild(lab);
+      }
+
+      var top = blk.y + blk.labelH + 6;
+      if (typeof bar.self === 'number' || typeof bar.other === 'number') {
+        g.appendChild(barRow(bar.self, top, trackX, trackW, barH, max, 'bar-self'));
+        g.appendChild(barRow(bar.other, top + barH + barGap, trackX, trackW, barH, max, 'bar-other'));
+      } else {
+        var note = el('text', { x: trackX, y: top + 11, class: 'bar-note' });
+        note.textContent = stateNote(bar.state);
+        g.appendChild(note);
+      }
+      svg.appendChild(g);
+    }
+
+    container.appendChild(svg);
+    appendLegend(container);
+  }
+
+  function barRow(value, y, x, width, height, max, className) {
+    var g = el('g', {});
+    if (typeof value !== 'number') return g;
+    var w = Math.max(2, width * ratioOf(value, max));
+    g.appendChild(el('rect', {
+      x: x, y: y.toFixed(1), width: w.toFixed(1), height: height, rx: 3, class: 'bar-shape ' + className
+    }));
+    var val = el('text', { x: (x + w + 5).toFixed(1), y: (y + height - 3).toFixed(1), class: 'bar-value' });
+    val.textContent = (Math.round(value * 10) / 10).toFixed(1).replace(/\.0$/, '');
+    g.appendChild(val);
+    return g;
+  }
+
+  return { render: render, renderBars: renderBars };
 })();

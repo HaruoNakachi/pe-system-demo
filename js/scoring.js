@@ -343,6 +343,80 @@ var PE_Scoring = (function () {
     return axes;
   }
 
+  /* ---- チャート用のデータ（表示専用。集計・判定には一切使わない） ----
+   * 値のない軸（適用外・担当外・観察機会なし・未回答）の扱いは
+   * 既存の radarAxes と同じ方針である（値を null にし、state で理由を返す）。 */
+
+  function aggregateItems(list, answers, otherAnswers) {
+    var selfSum = 0, selfCount = 0, otherSum = 0, otherCount = 0;
+    var state = 'unanswered';
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      if (it.notApplicable) { if (state === 'unanswered') state = 'notApplicable'; continue; }
+      var a = answerOf(answers, it.id);
+      if (a.na) { if (state !== 'answered') state = 'unobserved'; continue; }
+      if (a.score === null) continue;
+      state = 'answered';
+      selfSum += a.score; selfCount++;
+      var other = otherAnswers[it.id];
+      if (typeof other === 'number') { otherSum += other; otherCount++; }
+    }
+    return {
+      state: state,
+      self: selfCount > 0 ? selfSum / selfCount : null,
+      other: otherCount > 0 ? otherSum / otherCount : null
+    };
+  }
+
+  /* 基礎評価のレーダー用。軸＝基礎評価の項目（マスターから取得）。
+   * 値はその項目に属する実践例の平均。実践例が増えても平均で動く。 */
+  function basicAxes(items, answers, otherAnswers, master) {
+    var axes = [];
+    for (var b = 0; b < master.basicItems.length; b++) {
+      var bi = master.basicItems[b];
+      var ids = {};
+      for (var p = 0; p < bi.practiceItems.length; p++) ids[bi.practiceItems[p].id] = true;
+      var list = [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].domainId === 'basic' && ids[items[i].id]) list.push(items[i]);
+      }
+      var v = aggregateItems(list, answers, otherAnswers);
+      axes.push({ label: bi.name, state: v.state, self: v.self, other: v.other });
+    }
+    return axes;
+  }
+
+  /* 指定したラダーの力ごとのレーダー用。軸名はマスターから取得する。 */
+  function ladderAxes(items, answers, otherAnswers, master, ladderId) {
+    var ladder = null;
+    for (var l = 0; l < master.ladders.length; l++) {
+      if (master.ladders[l].id === ladderId) ladder = master.ladders[l];
+    }
+    var axes = [];
+    if (!ladder) return axes;
+    for (var c = 0; c < ladder.competencies.length; c++) {
+      var comp = ladder.competencies[c];
+      var list = [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].ladderId === ladderId && items[i].competencyId === comp.id) list.push(items[i]);
+      }
+      var v = aggregateItems(list, answers, otherAnswers);
+      axes.push({ label: comp.name, state: v.state, self: v.self, other: v.other });
+    }
+    return axes;
+  }
+
+  /* 各個人の目標の横棒グラフ用。実践例1つにつき1本組。 */
+  function personalBars(items, answers, otherAnswers) {
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].domainId !== 'personal') continue;
+      var v = aggregateItems([items[i]], answers, otherAnswers);
+      out.push({ label: items[i].text, state: v.state, self: v.self, other: v.other });
+    }
+    return out;
+  }
+
   function counts(items, answers) {
     var notApplicable = 0, unobserved = 0;
     for (var i = 0; i < items.length; i++) {
@@ -366,6 +440,9 @@ var PE_Scoring = (function () {
     certification: certification,
     gaps: gaps,
     radarAxes: radarAxes,
+    basicAxes: basicAxes,
+    ladderAxes: ladderAxes,
+    personalBars: personalBars,
     counts: counts
   };
 })();

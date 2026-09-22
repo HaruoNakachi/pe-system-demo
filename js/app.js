@@ -605,11 +605,45 @@
     }
     html += '</section>';
 
-    /* レーダーチャート */
+    /* チャートは領域別スコアと同じ順（基礎評価 → 専門実践評価 → 各個人の目標）に並べる。
+     * 軸の意味が違うため、3領域を1枚にまとめない。 */
+
+    /* チャート：基礎評価（レベル軸を持たない／R26） */
+    html += '<section class="card">'
+      + '<h2>基礎評価の' + PE_MASTER.basicItems.length + 'つの項目</h2>'
+      + '<p class="hint">基礎評価の項目ごとに、本人評価と他者評価を重ねて表示しています。'
+      + '値はその項目に属する実践例の平均です。</p>'
+      + '<div id="radar-basic" class="radar-wrap"></div>'
+      + '<p class="hint">現在は各項目に実践例が1つずつのため、表示している値は平均ではなく評価基準の値そのものです。</p>'
+      + '</section>';
+
+    /* チャート：実践ラダー（従来どおり） */
     html += '<section class="card">'
       + '<h2>実践ラダーの4つの力</h2>'
       + '<p class="hint">チャレンジレベル（レベル' + esc(challengeRoman) + '）の実践例について、本人評価と他者評価を重ねて表示しています。</p>'
       + '<div id="radar" class="radar-wrap"></div>'
+      + '</section>';
+
+    /* チャート：マネジメントラダー（選択しているときだけ出す／R20）。
+     * 非選択のときは枠も「なし」表示も出さない。 */
+    if (state.profile.managementLadder) {
+      var mgmt = ladderOf('management');
+      var mgmtLevel = PE_Scoring.romanOf(
+        (mgmt && mgmt.fixedLevel) ? mgmt.fixedLevel : state.profile.challengeLevel
+      );
+      html += '<section class="card">'
+        + '<h2>' + esc(mgmt ? mgmt.name : 'マネジメントラダー') + 'の'
+        + (mgmt ? mgmt.competencies.length : 0) + 'つの力</h2>'
+        + '<p class="hint">レベル' + esc(mgmtLevel) + 'の実践例について、本人評価と他者評価を重ねて表示しています。</p>'
+        + '<div id="radar-management" class="radar-wrap"></div>'
+        + '</section>';
+    }
+
+    /* チャート：各個人の目標（実践例が少ないため横棒グラフ／R28） */
+    html += '<section class="card">'
+      + '<h2>各個人の目標の実践例</h2>'
+      + '<p class="hint">合意した目標の実践例ごとに、本人評価と他者評価を並べています。目盛は評価基準の1〜4です。</p>'
+      + '<div id="bars-personal" class="radar-wrap"></div>'
       + '</section>';
 
     /* 適用外・担当外の件数（画面表記は「要資格（○○）項目」） */
@@ -677,12 +711,37 @@
     return html;
   }
 
+  function ladderOf(id) {
+    for (var i = 0; i < PE_MASTER.ladders.length; i++) {
+      if (PE_MASTER.ladders[i].id === id) return PE_MASTER.ladders[i];
+    }
+    return null;
+  }
+
   function afterDashboard() {
     var wrap = document.getElementById('radar');
     if (!wrap) return;
     var d = derived();
     var axes = PE_Scoring.radarAxes(d.items, state.answers, state.otherAnswers, PE_MASTER);
     PE_Radar.render(wrap, axes);
+
+    var basic = document.getElementById('radar-basic');
+    if (basic) {
+      PE_Radar.render(basic, PE_Scoring.basicAxes(d.items, state.answers, state.otherAnswers, PE_MASTER),
+        { ariaLabel: '基礎評価の項目ごとの本人評価と他者評価のレーダーチャート' });
+    }
+
+    var mgmt = document.getElementById('radar-management');
+    if (mgmt) {
+      PE_Radar.render(mgmt, PE_Scoring.ladderAxes(d.items, state.answers, state.otherAnswers, PE_MASTER, 'management'),
+        { ariaLabel: 'マネジメントラダーの力ごとの本人評価と他者評価のレーダーチャート' });
+    }
+
+    var personal = document.getElementById('bars-personal');
+    if (personal) {
+      PE_Radar.renderBars(personal, PE_Scoring.personalBars(d.items, state.answers, state.otherAnswers),
+        { ariaLabel: '各個人の目標の実践例ごとの本人評価と他者評価の横棒グラフ' });
+    }
   }
 
   /* ---------------- 画面：マイページ ---------------- */
