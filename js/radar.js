@@ -52,6 +52,34 @@ var PE_Radar = (function () {
     }
   }
 
+  /* 軸の名称を折り返す（ABC 改訂で「飼い主と動物の暮らしを支える力」「サービス価値・経営への理解」など
+     長い名称が増え、1行では左右の軸で SVG の外にはみ出すため）。
+     1行 perLine 文字まで（1文字だけの超過は折り返さない）。区切りのよい文字（の・と・を・に・「・」）の
+     直後で切れるときはそこで切る。 */
+  var LABEL_BREAK_CHARS = 'のとをに・';
+  function splitAxisLabel(text, perLine) {
+    var rest = String(text === null || text === undefined ? '' : text);
+    var lines = [];
+    while (rest.length > perLine + 1 && lines.length < 2) {
+      var cut = perLine;
+      for (var i = perLine; i >= 3; i--) {
+        if (LABEL_BREAK_CHARS.indexOf(rest.charAt(i - 1)) !== -1) { cut = i; break; }
+      }
+      lines.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    if (rest.length > 0) lines.push(rest);
+    return lines;
+  }
+
+  function stateNoteShort(state) {
+    if (state === 'notApplicable') return '（要資格）';
+    if (state === 'unobserved') return '（担当外・観察機会なし）';
+    if (state === 'empty') return '（実践例なし）';
+    if (state === 'unanswered') return '（未回答）';
+    return '';
+  }
+
   /* options.ariaLabel を渡さない場合は汎用の文言にする（ラダーの呼び出し側で職種名入りの文言を渡す）。 */
   function render(container, axes, options) {
     container.innerHTML = '';
@@ -60,7 +88,7 @@ var PE_Radar = (function () {
       return;
     }
 
-    var W = 440, H = 300, cx = 220, cy = 150, radius = 98, max = 4;
+    var W = 460, H = 330, cx = 230, cy = 165, radius = 98, max = 4;
 
     var svg = el('svg', {
       viewBox: '0 0 ' + W + ' ' + H,
@@ -115,33 +143,41 @@ var PE_Radar = (function () {
       }
     }
 
-    /* 力の名称 */
+    /* 力・項目の名称（長い名称は折り返す） */
+    var LINE_H = 13;
     for (var n = 0; n < axes.length; n++) {
       var lp = point(cx, cy, radius + 14, 1, n, axes.length);
       var anchor = 'middle';
-      var dy = 4;
+      var side = true;
       if (lp.x > cx + 4) { anchor = 'start'; }
       else if (lp.x < cx - 4) { anchor = 'end'; }
-      else { dy = (lp.y < cy) ? -6 : 16; }
-      var label = el('text', {
-        x: lp.x.toFixed(1),
-        y: (lp.y + dy).toFixed(1),
-        'text-anchor': anchor,
-        class: 'radar-label'
-      });
-      label.textContent = axes[n].label;
-      svg.appendChild(label);
-
-      if (axes[n].state === 'notApplicable' || axes[n].state === 'unobserved' || axes[n].state === 'unanswered') {
+      else { side = false; }
+      var lines = splitAxisLabel(axes[n].label, side ? 9 : 14);
+      /* 幅が狭いため短縮形。資格名を含む正式表記は同じ画面の件数表に出る。 */
+      var noteText = stateNoteShort(axes[n].state);
+      var total = lines.length + (noteText ? 1 : 0);
+      var firstY;
+      if (side) firstY = lp.y + 4 - (total - 1) * LINE_H / 2;
+      else if (lp.y < cy) firstY = lp.y - 6 - (total - 1) * LINE_H;
+      else firstY = lp.y + 16;
+      for (var ln = 0; ln < lines.length; ln++) {
+        var label = el('text', {
+          x: lp.x.toFixed(1),
+          y: (firstY + ln * LINE_H).toFixed(1),
+          'text-anchor': anchor,
+          class: 'radar-label'
+        });
+        label.textContent = lines[ln];
+        svg.appendChild(label);
+      }
+      if (noteText) {
         var note = el('text', {
           x: lp.x.toFixed(1),
-          y: (lp.y + dy + 13).toFixed(1),
+          y: (firstY + lines.length * LINE_H).toFixed(1),
           'text-anchor': anchor,
           class: 'radar-label radar-label-note'
         });
-        /* 幅が狭いため短縮形。資格名を含む正式表記は同じ画面の件数表に出る。 */
-        note.textContent = axes[n].state === 'notApplicable' ? '（要資格）'
-          : (axes[n].state === 'unobserved' ? '（担当外・観察機会なし）' : '（未回答）');
+        note.textContent = noteText;
         svg.appendChild(note);
       }
     }
@@ -160,9 +196,7 @@ var PE_Radar = (function () {
   }
 
   function stateNote(state) {
-    if (state === 'notApplicable') return '（要資格）';
-    if (state === 'unobserved') return '（担当外・観察機会なし）';
-    return '（未回答）';
+    return stateNoteShort(state) || '（未回答）';
   }
 
   /* 長い実践例の文言は行で折り返し、収まらない分は「…」で省略する。

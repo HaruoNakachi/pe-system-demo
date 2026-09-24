@@ -3,8 +3,8 @@
  * すべて架空のデモ用データである。実在するスタッフ・病院の情報は含まない。
  *
  * 職種を選ぶと、実践ラダーとマネジメントラダーが丸ごと入れ替わる（R19）。
- * レベル毎の定義（PE_LEVEL_DEFINITIONS）と基礎評価（PE_MASTER.basicItems）は全職種共通であり、
- * ここには置かない（R22・R26）。
+ * レベル毎の定義（PE_LEVEL_DEFINITIONS）・A（PE_MASTER.basicItems）・C（PE_MASTER.contribution）は
+ * 全職種共通であり、ここには置かない（R22・R26・R32）。
  *
  * ■ 職種を増やすとき（例：獣医師）
  *   PE_JOB_TYPES の末尾に、下記と同じ形のオブジェクトを1つ足すだけでよい。
@@ -20,10 +20,10 @@
  *       {
  *         id: 'practice', name: '実践ラダー',
  *         required: true,              必須のラダー
- *         fixedLevel: null,            null ＝ 設定のチャレンジレベル（Ⅰ〜Ⅳ）に追随する
+ *         fixedLevel: null,            null ＝ 設定の B のチャレンジレベル（Lv1〜Lv4）に追随する
  *         competencies: [              力（職種 × ラダーごとに持つ）
  *           { id, name, description,
- *             levelGoals: [            レベル毎の目標（力 × レベル × 職種）。レベルⅠ〜Ⅳ
+ *             levelGoals: [            レベル毎の目標（力 × レベル × 職種）。Lv1〜Lv4
  *               { level, requiresLicense, licenseName?, source, text,
  *                 practiceItems: [ { id, source, text } ] }   実践例（回答の保存キーになるIDは全職種で重複させない）
  *             ] }
@@ -42,7 +42,7 @@
  * source: "supplement" … デモの挙動確認のために補完した架空データ（暫定案）
  */
 
-/* マネジメントラダーは全職種でレベルⅠ固定（チャレンジレベルは実践ラダーにのみ適用。R20）。
+/* マネジメントラダーは全職種で Lv1 固定（B のチャレンジレベルは実践ラダーにのみ適用。R20）。
  * 力の名前（人材育成／チーム運営／改善）は全職種共通とし、実践例を職種ごとに差し替える。 */
 
 var PE_JOB_TYPES = [
@@ -53,6 +53,8 @@ var PE_JOB_TYPES = [
   {
     id: 'vet_nurse',
     name: '愛玩動物看護師',
+    /* B の表示名（受領資料・用語集1節で確定） */
+    domainBName: 'B｜愛玩動物看護実践能力',
     licenses: ['愛玩動物看護師'],
     ladders: [
       {
@@ -62,8 +64,8 @@ var PE_JOB_TYPES = [
         fixedLevel: null,
         competencies: [
           {
-            id: 'needs', name: 'ニーズをとらえる力',
-            description: '動物と飼い主の状態・状況から必要なことを見極める',
+            id: 'needs', name: '動物と飼い主を理解する力',
+            description: '動物の身体・行動・生活環境、飼い主の状況から必要な看護や支援を捉える力',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -96,8 +98,8 @@ var PE_JOB_TYPES = [
             ]
           },
           {
-            id: 'care', name: 'ケアする力',
-            description: '必要なケア・処置を実施する',
+            id: 'care', name: '動物看護を実践する力',
+            description: '把握したニーズをもとに、安全で適切な動物看護・診療補助を実践し、結果を評価する力',
             levelGoals: [
               {
                 level: 1, requiresLicense: true, licenseName: '愛玩動物看護師', source: 'supplement',
@@ -130,8 +132,8 @@ var PE_JOB_TYPES = [
             ]
           },
           {
-            id: 'collab', name: '協働する力',
-            description: '獣医師・他職種・飼い主と連携して進める',
+            id: 'collab', name: 'チームで支える力',
+            description: '獣医師やスタッフ等と情報を共有・連携し、チームとしてより良い動物医療・看護につなげる力',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -164,8 +166,8 @@ var PE_JOB_TYPES = [
             ]
           },
           {
-            id: 'decision', name: '意思決定を支える力',
-            description: '飼い主が納得して選べるよう支える',
+            id: 'decision', name: '飼い主と動物の暮らしを支える力',
+            description: '動物福祉と飼い主の価値観・生活背景を踏まえ、選択や家庭でのケア、動物との暮らしを支援する力',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -203,7 +205,7 @@ var PE_JOB_TYPES = [
         id: 'management',
         name: 'マネジメントラダー',
         required: false,
-        /* マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）。本デモではレベルⅠ固定とする。 */
+        /* マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）。本デモでは Lv1 固定とする。 */
         fixedLevel: 1,
         competencies: [
           {
@@ -247,17 +249,17 @@ var PE_JOB_TYPES = [
     ],
     /* 他者評価のダミー値（既存の値。変えない） */
     otherAnswers: {
-      /* 実践ラダー・レベルⅡ（仕様6-2） */
+      /* 実践ラダー・Lv2（仕様6-2） */
       pp_needs_2: 3,
       pp_care_2: 4,
       pp_collab_2: 4,    /* 仕様6-2：想定する本人評価 2 に対し他者 4（差が 2 の項目その2） */
       pp_decision_2: 2,
-      /* 実践ラダー・補完したレベルⅠ・Ⅲ・Ⅳ（固定のダミー値） */
+      /* 実践ラダー・補完した Lv1・Lv3・Lv4（固定のダミー値） */
       pp_needs_1: 3, pp_needs_3: 3, pp_needs_4: 2,
       pp_care_1: 4, pp_care_3: 3, pp_care_4: 2,
       pp_collab_1: 3, pp_collab_3: 2, pp_collab_4: 2,
       pp_decision_1: 4, pp_decision_3: 3, pp_decision_4: 2,
-      /* マネジメントラダー・レベルⅠ（仕様6-2） */
+      /* マネジメントラダー・Lv1（仕様6-2） */
       mp_ikusei_1: 3,
       mp_team_1: 3,
       mp_kaizen_1: 2
@@ -266,13 +268,16 @@ var PE_JOB_TYPES = [
 
   /* ================================================================
    * 動物ケアスタッフ
-   * 力は愛玩動物看護師と同じ4つ。ケアする力のみ新たに作った（診療の補助を含めない）。
+   * 力は愛玩動物看護師と同じ4つ（ABC 改訂で名称を合わせた。IDは変えない）。
+ * 動物看護を実践する力のみ内容を新たに作った（診療の補助を含めない）。
    * 残り3つの力とマネジメントラダーは愛玩動物看護師と同じ文言で、別のレコード・別のIDとして持つ。
    * 資格が要る実践例を置かないため、R6 で除外される実践例はない。
    * ================================================================ */
   {
     id: 'care_staff',
     name: '動物ケアスタッフ',
+    /* B の表示名は仕様で未確定のため、汎用の呼び方を使う（用語集1節） */
+    domainBName: 'B｜専門実践能力',
     licenses: [],
     ladders: [
       {
@@ -282,8 +287,8 @@ var PE_JOB_TYPES = [
         fixedLevel: null,
         competencies: [
           {
-            id: 'needs', name: 'ニーズをとらえる力',
-            description: '動物と飼い主の状態・状況から必要なことを見極める',
+            id: 'needs', name: '動物と飼い主を理解する力',
+            description: '動物の身体・行動・生活環境、飼い主の状況から必要な看護や支援を捉える力',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -316,8 +321,8 @@ var PE_JOB_TYPES = [
             ]
           },
           {
-            id: 'care', name: 'ケアする力',
-            description: '食事・排泄・清潔のケアと保定の補助を行い、観察したことを報告する（診療の補助は含めない）',
+            id: 'care', name: '動物看護を実践する力',
+            description: '食事・排泄・清潔のケアと保定の補助を安全に行い、観察したことを報告して結果を確かめる力（動物ケアスタッフは診療の補助を含まない）',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -350,8 +355,8 @@ var PE_JOB_TYPES = [
             ]
           },
           {
-            id: 'collab', name: '協働する力',
-            description: '獣医師・他職種・飼い主と連携して進める',
+            id: 'collab', name: 'チームで支える力',
+            description: '獣医師やスタッフ等と情報を共有・連携し、チームとしてより良い動物医療・看護につなげる力',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -384,8 +389,8 @@ var PE_JOB_TYPES = [
             ]
           },
           {
-            id: 'decision', name: '意思決定を支える力',
-            description: '飼い主が納得して選べるよう支える',
+            id: 'decision', name: '飼い主と動物の暮らしを支える力',
+            description: '動物福祉と飼い主の価値観・生活背景を踏まえ、選択や家庭でのケア、動物との暮らしを支援する力',
             levelGoals: [
               {
                 level: 1, requiresLicense: false, source: 'supplement',
@@ -481,6 +486,8 @@ var PE_JOB_TYPES = [
   {
     id: 'groomer',
     name: 'トリマー',
+    /* B の表示名は仕様で未確定のため、汎用の呼び方を使う（用語集1節） */
+    domainBName: 'B｜専門実践能力',
     licenses: [],
     ladders: [
       {
@@ -689,6 +696,8 @@ var PE_JOB_TYPES = [
   {
     id: 'reception',
     name: '受付スタッフ',
+    /* B の表示名は仕様で未確定のため、汎用の呼び方を使う（用語集1節） */
+    domainBName: 'B｜専門実践能力',
     licenses: [],
     ladders: [
       {

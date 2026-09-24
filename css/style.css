@@ -723,7 +723,7 @@ summary:focus-visible {
 /* ---------- レーダーチャート ---------- */
 
 .radar-wrap { margin-top: 8px; text-align: center; }
-.radar-svg { width: 100%; max-width: 440px; height: auto; }
+.radar-svg { width: 100%; max-width: 460px; height: auto; }
 .radar-grid { fill: none; stroke: var(--radar-grid); stroke-width: 1; }
 .radar-axis { stroke: var(--radar-axis); stroke-width: 1; }
 .radar-tick { font-size: 9px; fill: var(--radar-tick); }
@@ -811,7 +811,8 @@ summary:focus-visible {
 
 .weight-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* ABC 改訂で4領域になった。狭い幅では折り返す */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
   margin-top: 10px;
 }
@@ -924,6 +925,43 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* ---------- C｜経営・組織に貢献する力（ABC 改訂） ----------
+ * 評価入力の「経営」「組織」の分類見出し、設定画面の病院の設定（デモ用）。
+ * ボタンは .btn（min-height: 44px）を使う。
+ */
+
+.category-heading {
+  margin: 14px 0 8px;
+  font-size: 0.98rem;
+  color: var(--accent-dark);
+}
+.level-row-title {
+  margin: 12px 0 6px;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+.card > h2 + .level-row-title { margin-top: 4px; }
+.c-level-caption { margin: 8px 0 6px; font-size: 0.85rem; font-weight: 700; }
+.c-item-panel { margin-top: 6px; }
+.c-practice-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.c-practice {
+  border-top: 1px dashed var(--line);
+  padding: 8px 0 4px;
+}
+.c-practice:first-child { border-top: 0; }
+.c-practice .btn-row { margin-top: 6px; }
+.c-practice-editing { background: var(--accent-soft); border-radius: var(--radius-md); padding: 10px; margin: 6px 0; }
+.c-practice-text {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- デモの見た目（比較用）：配色が決まったらこの節ごと削除する ---------- */
 
 .theme-list {
@@ -1010,4 +1048,5 @@ summary:focus-visible {
   .weight-field label { margin-bottom: 0; }
   .goal-panel { padding: 12px; }
   #personal-goal-settings .btn-row .btn { flex: 1 1 auto; }
+  #contribution-settings .btn-row .btn { flex: 1 1 auto; }
 }

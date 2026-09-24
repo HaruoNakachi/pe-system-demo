@@ -16,13 +16,20 @@
     submitted: { submitted: false, at: null },
     /* 各個人の目標（改訂方針D）。{ goals: [{ id, text, source, weight, practiceItems: [{ id, text, source }] }], seq } */
     personalGoals: { goals: [], seq: 0 },
-    /* 個人ごとの3領域の重み（R30）。{ basic, professional, personal, updatedAt } */
-    personalWeight: null
+    /* 個人ごとの4領域の重み（R30）。{ basic, professional, contribution, personal, updatedAt } */
+    personalWeight: null,
+    /* 病院の設定（C。ABC 改訂・R32）。{ useContribution, practices: [{ id, itemId, level, text, source }], seq } */
+    hospital: null
   };
 
   /* 設定画面の「各個人の目標（デモ用の編集）」の一時的な画面状態（保存しない） */
   var goalEditor = null;   /* { mode: 'new' | 'edit', goalId, text, items: [{ id, text }], error } */
   var goalFlash = null;    /* 直前の操作結果の一言。描画したら消す */
+
+  /* 設定画面の「C｜経営・組織に貢献する力（病院の設定・デモ用）」の一時的な画面状態（保存しない） */
+  var cEditor = null;      /* { practiceId: null | ID, itemId, level, text, error } */
+  var cFlash = null;       /* 直前の操作結果の一言。描画したら消す */
+  var cEditLevel = null;   /* 実践例の編集で表示しているレベル（null のときは C のチャレンジレベル） */
 
   var ROUTES = ['login', 'dashboard', 'input', 'mypage', 'settings', 'complete'];
 
@@ -214,12 +221,17 @@
         name: PE_DEFAULT_PROFILE.name,
         jobTypeId: PE_DEFAULT_PROFILE.jobTypeId,
         managementLadder: PE_DEFAULT_PROFILE.managementLadder,
-        challengeLevel: PE_DEFAULT_PROFILE.challengeLevel
+        challengeLevel: PE_DEFAULT_PROFILE.challengeLevel,
+        contributionLevel: PE_DEFAULT_PROFILE.contributionLevel
       };
       PE_Storage.setJSON(PE_KEYS.profile, profile);
     }
-    if ([1, 2, 3, 4].indexOf(profile.challengeLevel) === -1) profile.challengeLevel = 2;
-    if (migrateProfile(profile)) PE_Storage.setJSON(PE_KEYS.profile, profile);
+    var profileChanged = false;
+    if ([1, 2, 3, 4].indexOf(profile.challengeLevel) === -1) { profile.challengeLevel = PE_DEFAULT_PROFILE.challengeLevel; profileChanged = true; }
+    /* C のチャレンジレベル（ABC 改訂で追加）。既存の保存データには Lv1 を補う */
+    if ([1, 2, 3, 4].indexOf(profile.contributionLevel) === -1) { profile.contributionLevel = 1; profileChanged = true; }
+    if (migrateProfile(profile)) profileChanged = true;
+    if (profileChanged) PE_Storage.setJSON(PE_KEYS.profile, profile);
     state.profile = profile;
 
     /* マスターは読み取り専用のシードとして保存する（R1） */
@@ -247,9 +259,9 @@
     var sub = PE_Storage.getJSON(PE_KEYS.submitted, null);
     state.submitted = (sub && typeof sub === 'object') ? sub : { submitted: false, at: null };
 
-    /* 各個人の目標と個人ごとの重み（改訂方針D）。
+    /* 各個人の目標と個人ごとの重み。
      * キーが無い・壊れているときはシードから初期化する（pe_demo_other_answers と同じ考え方）。
-     * 既定はプリセット目標1つ（実践例 gp_1・gp_2、IDは変えない）と 50／40／10。 */
+     * 既定はプリセット目標1つ（実践例 gp_1・gp_2、IDは変えない）と 40／35／15／10。 */
     var goals = PE_Storage.getJSON(PE_KEYS.personalGoals, null);
     if (!isValidGoalsData(goals)) {
       goals = PE_initialPersonalGoals();
@@ -258,21 +270,32 @@
     if (typeof goals.seq !== 'number' || goals.seq < 0) goals.seq = 0;
     state.personalGoals = goals;
 
+    /* ABC 改訂前の3領域の重み（basic／professional／personal のみ）は4領域の形で検証を通らないため、
+     * ここで新しい既定値（40／35／15／10）に置き換える（移行。README に記載）。 */
     var weight = PE_Storage.getJSON(PE_KEYS.personalWeight, null);
     if (!isValidWeight(weight)) {
       weight = PE_defaultPersonalWeight();
       PE_Storage.setJSON(PE_KEYS.personalWeight, weight);
     }
     state.personalWeight = weight;
+
+    /* 病院の設定（C。ABC 改訂で追加）。キーが無い・壊れているときは「C を使う・既定の実践例」で初期化する。 */
+    var hospital = PE_Storage.getJSON(PE_KEYS.hospital, null);
+    if (!isValidHospital(hospital)) {
+      hospital = PE_initialHospital();
+      PE_Storage.setJSON(PE_KEYS.hospital, hospital);
+    }
+    if (typeof hospital.seq !== 'number' || hospital.seq < 0) hospital.seq = 0;
+    state.hospital = hospital;
   }
 
   function resetAll(reinit) {
-    /* 合意した目標と個人ごとの重みは評価データなので消す。
+    /* 合意した目標・個人ごとの重み・病院の設定（C）は評価データなので消す。
      * 配色（pe_demo_theme）と開閉状態（pe_demo_ui）は消さない。 */
     PE_Storage.clearKeys([
       PE_KEYS.version, PE_KEYS.session, PE_KEYS.profile, PE_KEYS.master,
       PE_KEYS.answers, PE_KEYS.otherAnswers, PE_KEYS.submitted,
-      PE_KEYS.personalGoals, PE_KEYS.personalWeight
+      PE_KEYS.personalGoals, PE_KEYS.personalWeight, PE_KEYS.hospital
     ]);
     state.session = null;
     state.profile = null;
@@ -281,8 +304,12 @@
     state.submitted = { submitted: false, at: null };
     state.personalGoals = { goals: [], seq: 0 };
     state.personalWeight = null;
+    state.hospital = null;
     goalEditor = null;
     goalFlash = null;
+    cEditor = null;
+    cFlash = null;
+    cEditLevel = null;
     if (reinit) initData();
   }
 
@@ -333,6 +360,22 @@
     return data.goals.length === 0 || sum === 100;
   }
 
+  /* 病院の設定（C）の保存形式の検証。実践例は空欄を許さない（保存時にも弾いている） */
+  function isValidHospital(h) {
+    if (!h || typeof h !== 'object' || typeof h.useContribution !== 'boolean' || !Array.isArray(h.practices)) return false;
+    var seen = {};
+    for (var i = 0; i < h.practices.length; i++) {
+      var p = h.practices[i];
+      if (!p || typeof p.id !== 'string' || !p.id || seen[p.id]) return false;
+      if (!PE_contributionItemById(p.itemId)) return false;
+      if ([1, 2, 3, 4].indexOf(p.level) === -1) return false;
+      if (typeof p.text !== 'string' || !p.text.trim()) return false;
+      seen[p.id] = true;
+    }
+    return true;
+  }
+
+  /* 4領域（A・B・C・各個人の目標）の重み。ABC 改訂前の3領域の形は通さない（初期化時に既定値へ置き換える） */
   function isValidWeight(w) {
     if (!w || typeof w !== 'object') return false;
     var sum = 0;
@@ -357,6 +400,7 @@
   function saveSession() { return persist(PE_KEYS.session, state.session); }
   function savePersonalGoals() { return persist(PE_KEYS.personalGoals, state.personalGoals); }
   function savePersonalWeight() { return persist(PE_KEYS.personalWeight, state.personalWeight); }
+  function saveHospital() { return persist(PE_KEYS.hospital, state.hospital); }
 
   /* ---------------- 導出データ ---------------- */
 
@@ -377,6 +421,30 @@
   /* 「実践ラダー（トリマー）」のように、ラダー名に職種名を添える */
   function ladderTitle(ladderName) {
     return ladderName + '（' + currentJob().name + '）';
+  }
+
+  /* 評価領域の画面上の名称（B は職種ごとの表示名。R25・R31） */
+  function domainTitle(domainId) {
+    return PE_domainName(domainId, currentJob());
+  }
+
+  /* 病院が C を使うか（R32） */
+  function useC() {
+    return !!(state.hospital && state.hospital.useContribution);
+  }
+
+  /* 集計に使う領域の重み。C を使わないときは C を除いて再正規化した値（R30） */
+  function effectiveWeights() {
+    return PE_effectiveWeights(state.personalWeight, useC());
+  }
+
+  /* 病院の C の実践例のうち、指定したレベルのもの */
+  function cPracticesAt(level, itemId) {
+    var out = [], list = state.hospital ? state.hospital.practices : [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].level === level && (!itemId || list[i].itemId === itemId)) out.push(list[i]);
+    }
+    return out;
   }
 
   /* 他者評価のダミー値。保存値を優先し、保存値に無いIDは職種のマスターの値で補う（保存はしない）。
@@ -401,39 +469,58 @@
 
   function derived() {
     var master = currentMaster();
-    var groups = PE_Scoring.buildGroups(master, state.profile, state.personalGoals.goals);
+    var groups = PE_Scoring.buildGroups(master, state.profile, state.personalGoals.goals, state.hospital);
     var items = PE_Scoring.flatten(groups);
     return { groups: groups, items: items, master: master };
   }
 
-  /* 集計に渡す個人ごとの重み（3領域・目標ごと） */
+  /* 集計に渡す個人ごとの重み（領域・目標ごと）と C の採否 */
   function scoreOptions() {
-    return { weights: state.personalWeight, goals: state.personalGoals.goals };
+    return {
+      weights: effectiveWeights(), goals: state.personalGoals.goals,
+      useContribution: useC(), job: currentJob()
+    };
   }
 
   /* ---------------- 各個人の目標：表示の補助 ---------------- */
 
   function domainNameOf(id) {
-    for (var i = 0; i < PE_DOMAINS.length; i++) {
-      if (PE_DOMAINS[i].id === id) return PE_DOMAINS[i].name;
-    }
-    return id;
+    return domainTitle(id);
   }
 
-  /* 「基礎評価50％／専門実践評価40％／各個人の目標10％」 */
+  /* 重みの表示。整数はそのまま、端数は小数第1位まで（再正規化した値のため） */
+  function fmtPct(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return '—';
+    var r = Math.round(v * 10) / 10;
+    return (Math.floor(r) === r) ? String(r) : r.toFixed(1);
+  }
+
+  /* 「A 40％／B 35％／C 15％／各個人の目標 10％」。w に無い領域（C を使わないときの C）は出さない */
   function weightLabel(w) {
     var parts = [];
     for (var i = 0; i < PE_DOMAINS.length; i++) {
-      parts.push(PE_DOMAINS[i].name + w[PE_DOMAINS[i].id] + '％');
+      var id = PE_DOMAINS[i].id;
+      if (typeof w[id] !== 'number') continue;
+      parts.push(PE_DOMAINS[i].short + ' ' + fmtPct(w[id]) + '％');
     }
     return parts.join('／');
   }
 
-  /* 「50／40／10」 */
+  /* 「40／35／15／10」 */
   function weightShort(w) {
     var parts = [];
-    for (var i = 0; i < PE_DOMAINS.length; i++) parts.push(String(w[PE_DOMAINS[i].id]));
+    for (var i = 0; i < PE_DOMAINS.length; i++) {
+      if (typeof w[PE_DOMAINS[i].id] === 'number') parts.push(fmtPct(w[PE_DOMAINS[i].id]));
+    }
     return parts.join('／');
+  }
+
+  /* C を使わないときの再正規化の説明（R30）。C を使うときは空文字 */
+  function renormalizeNote() {
+    if (useC()) return '';
+    var cw = state.personalWeight.contribution;
+    return 'この病院は C を使わない設定のため、C の重み（' + fmtPct(cw) + '％）を除き、残りの比率を保ったまま合計100％に'
+      + '再正規化しています（' + weightLabel(effectiveWeights()) + '）。';
   }
 
   function isDefaultWeight(w) {
@@ -443,14 +530,14 @@
     return true;
   }
 
-  /* 目標が総合スコアに占める割合（％）＝ 目標ごとの重み × 各個人の目標の重み ÷ 100 */
+  /* 目標が総合スコアに占める割合（％）＝ 目標ごとの重み × 各個人の目標の重み（適用後）÷ 100 */
   function goalShareText(goalWeight, personalWeight) {
-    var pw = (typeof personalWeight === 'number') ? personalWeight : state.personalWeight.personal;
+    var pw = (typeof personalWeight === 'number') ? personalWeight : effectiveWeights().personal;
     return (Math.round(goalWeight * pw / 100 * 10) / 10).toFixed(1);
   }
 
   function goalWeightLine(goalWeight) {
-    return '目標内の重み ' + goalWeight + '％（各個人の目標 ' + state.personalWeight.personal
+    return '目標内の重み ' + goalWeight + '％（各個人の目標 ' + fmtPct(effectiveWeights().personal)
       + '％のうち ' + goalShareText(goalWeight) + '％）';
   }
 
@@ -458,38 +545,28 @@
     return count > 1 ? '合意した目標（' + (index + 1) + '／' + count + '）' : '合意した目標';
   }
 
-  /* 上限と入力時間の目安（R5・R24 改訂／改訂方針D 5-5）。
-   * 20項目の上限は基礎評価＋専門実践評価に適用し、各個人の目標は対象外とする。
-   * 要資格項目は回答しないため数えない（従来の「3領域の合計」と同じ数え方）。
-   * 入力時間の目安は1問あたり30〜60秒（デモアプリ仕様11-2）。 */
-  function limitSummary(items) {
-    var core = 0, personal = 0;
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].notApplicable) continue;
-      if (items[i].domainId === 'personal') personal++;
-      else core++;
-    }
-    var total = core + personal;
-    return {
-      core: core, personal: personal, total: total,
-      minMinutes: Math.ceil(total * 30 / 60),
-      maxMinutes: Math.ceil(total * 60 / 60)
-    };
-  }
-
-  function limitSummaryHtml(items) {
-    var s = limitSummary(items);
-    return '<ul class="limit-list">'
-      + '<li>基礎評価＋専門実践評価：<strong>' + s.core + '項目</strong>／上限20項目'
-      + (s.core <= 20 ? '（上限内）' : '　<span class="warn-text">上限を超えています。</span>') + '</li>'
-      + '<li>各個人の目標：<strong>' + s.personal + '項目</strong>（上限の対象外）</li>'
+  /* 問数と入力時間の目安（R5・R24 改訂：問数はどの評価領域にも上限を設けない）。
+   * 領域ごと（A・B 実践ラダー・B マネジメントラダー・C・各個人の目標）の問数と合計、入力時間の目安を出す。
+   * 要資格項目は回答しないため数えない。入力時間の目安は1問あたり30〜60秒（デモアプリ仕様11-2）。 */
+  function questionSummaryHtml(items) {
+    var s = PE_Scoring.questionCounts(items);
+    var practice = ladderOf('practice');
+    var mgmt = ladderOf('management');
+    var html = '<ul class="limit-list">'
+      + '<li>' + esc(domainTitle('basic')) + '：<strong>' + s.basic + '問</strong></li>'
+      + '<li>' + esc(domainTitle('professional')) + '｜' + esc(practice ? practice.name : '') + '：<strong>' + s.practice + '問</strong></li>'
+      + '<li>' + esc(domainTitle('professional')) + '｜' + esc(mgmt ? mgmt.name : '') + '：'
+      + (state.profile.managementLadder ? '<strong>' + s.management + '問</strong>' : '選択していません（0問）') + '</li>'
+      + '<li>' + esc(domainTitle('contribution')) + '：'
+      + (useC() ? '<strong>' + s.contribution + '問</strong>' : '使わない設定です（0問）') + '</li>'
+      + '<li>' + esc(domainTitle('personal')) + '：<strong>' + s.personal + '問</strong></li>'
       + '<li>合計 <strong>' + s.total + '問</strong>・入力時間の目安 '
       + (s.total > 0 ? '<strong>約' + s.minMinutes + '〜' + s.maxMinutes + '分</strong>' : '—（回答対象がありません）')
       + '</li>'
       + '</ul>'
-      + '<p class="limit-note">1回の評価で回答する実践例は、基礎評価と専門実践評価の合計で20項目以内に収める決まりです。'
-      + '各個人の目標は上限の対象外ですが、問数が増えるほど入力時間が延びます。'
+      + '<p class="limit-note">問数に上限はありません。入力の負担を把握できるよう、問数と入力時間の目安を表示しています。'
       + '入力時間の目安は1問あたり30〜60秒で計算しています。</p>';
+    return html;
   }
 
   /* ---------------- 各個人の目標：編集（設定画面のデモ用の編集） ---------------- */
@@ -499,6 +576,7 @@
   function collectUsedIds() {
     var used = {};
     var k;
+    /* A の項目と実践例 */
     for (var b = 0; b < PE_MASTER.basicItems.length; b++) {
       used[PE_MASTER.basicItems[b].id] = true;
       for (var bp = 0; bp < PE_MASTER.basicItems[b].practiceItems.length; bp++) {
@@ -518,6 +596,9 @@
         }
       }
     }
+    /* C の既定の実践例と病院の C の実践例 */
+    var cps = PE_MASTER.contribution.defaultPractices.concat(state.hospital ? state.hospital.practices : []);
+    for (var cp = 0; cp < cps.length; cp++) used[cps[cp].id] = true;
     var lists = [PE_MASTER.personalGoals, state.personalGoals.goals];
     for (var s = 0; s < lists.length; s++) {
       for (var q = 0; q < lists[s].length; q++) {
@@ -731,7 +812,7 @@
     w.updatedAt = new Date().toISOString();
     state.personalWeight = w;
     savePersonalWeight();
-    goalFlash = { type: 'ok', text: '3領域の重みを保存しました（' + weightLabel(w) + '）。' };
+    goalFlash = { type: 'ok', text: '4領域の重みを保存しました（' + weightLabel(w) + '）。' + renormalizeNote() };
     return true;
   }
 
@@ -740,7 +821,7 @@
     w.updatedAt = new Date().toISOString();
     state.personalWeight = w;
     savePersonalWeight();
-    goalFlash = { type: 'ok', text: '3領域の重みを既定値（' + weightLabel(w) + '）に戻しました。' };
+    goalFlash = { type: 'ok', text: '4領域の重みを既定値（' + weightLabel(w) + '）に戻しました。' + renormalizeNote() };
   }
 
   function saveGoalWeights() {
@@ -929,21 +1010,36 @@
       + '<p class="progress-text">回答済み <strong>' + prog.answered + '</strong> ／ 対象 <strong>' + prog.total + '</strong>'
       + '（' + esc(licenseTermOf(d.items)) + 'の' + cnt.notApplicable + '件は対象数から除いています）</p>'
       + '<div class="progress-bar"><span style="width:' + (prog.total ? Math.round(prog.answered / prog.total * 100) : 0) + '%"></span></div>'
-      + limitSummaryHtml(d.items)
+      + questionSummaryHtml(d.items)
       + '</div>'
-      + '<p class="hint">回答するのは実践例のみです。親（基礎評価の項目／レベル毎の目標／合意した目標）には回答しません。'
+      + '<p class="hint">回答するのは実践例のみです。親（A の項目／レベル毎の目標／C の項目／合意した目標）には回答しません。'
       + '1つ回答するごとに自動保存され、次回そのまま再開できます。</p>'
       + '</section>';
 
-    var lastDomain = null;
+    /* 並びは A → B（実践ラダー・マネジメントラダー） → C → 各個人の目標（buildGroups の順） */
+    var lastDomain = null, lastCategory = null;
     var hasPersonal = false;
+    var cEmpty = useC() && cPracticesAt(state.profile.contributionLevel).length === 0;
     for (var g = 0; g < d.groups.length; g++) {
       var grp = d.groups[g];
       if (grp.domainId !== lastDomain) {
         lastDomain = grp.domainId;
         html += '<h2 class="domain-heading">' + esc(grp.domainName) + domainHeadingNote(grp.domainId) + '</h2>';
+        if (grp.domainId === 'contribution' && cEmpty) {
+          html += '<section class="card"><p class="notice notice-warn">C のチャレンジレベル（'
+            + esc(PE_Scoring.levelLabel(state.profile.contributionLevel)) + '）の実践例が病院の設定に1件もないため、'
+            + 'C の回答対象はありません。C のレベル認定は「対象なし」になります。</p></section>';
+        }
       }
       if (grp.domainId === 'personal') hasPersonal = true;
+      if (grp.domainId === 'contribution') {
+        if (cEmpty) continue;
+        /* C は「経営」「組織」の分類 → 項目 → 実践例 の順にまとめる */
+        if (grp.categoryId !== lastCategory) {
+          lastCategory = grp.categoryId;
+          html += '<h3 class="category-heading">' + esc(grp.categoryName) + '</h3>';
+        }
+      }
       html += renderGroup(grp);
     }
     /* 合意した目標が0件のときも、領域の見出しと「回答対象がない」旨を出す */
@@ -967,12 +1063,17 @@
 
   function domainHeadingNote(domainId) {
     if (domainId === 'basic') {
-      return '<span class="domain-note">レベル軸を持ちません。設定にかかわらず全員が同じ実践例に回答します。</span>';
+      return '<span class="domain-note">レベル軸を持ちません。職種・設定にかかわらず全員が同じ実践例に回答します。</span>';
     }
     if (domainId === 'professional') {
       return '<span class="domain-note">職種（' + esc(currentJob().name) + '）の実践ラダー'
         + (state.profile.managementLadder ? '・マネジメントラダー' : '')
-        + 'です。チャレンジレベル1レベル分の実践例に回答します。</span>';
+        + 'です。B のチャレンジレベル1レベル分の実践例に回答します。</span>';
+    }
+    if (domainId === 'contribution') {
+      return '<span class="domain-note">全職種共通です。C のチャレンジレベル（'
+        + esc(PE_Scoring.levelLabel(state.profile.contributionLevel)) + '）の実践例に回答します。'
+        + '実践例は病院が設定します。</span>';
     }
     var n = state.personalGoals.goals.length;
     return '<span class="domain-note">その期に合意した目標の実践例に回答します。'
@@ -982,11 +1083,21 @@
   function renderGroup(grp) {
     var head = '';
     if (grp.domainId === 'basic') {
-      head = '<p class="group-kind">基礎評価の項目</p><h3 class="group-title">' + esc(grp.parentName) + '</h3>';
+      head = '<p class="group-kind">A の項目</p><h3 class="group-title">' + esc(grp.parentName) + '</h3>';
+    } else if (grp.domainId === 'contribution') {
+      /* C の項目ごとに親としてまとめる（R2）。実践例は病院の設定で編集できるため必ずエスケープする */
+      var cdef = PE_Scoring.levelDefinitionOf(grp.level);
+      head = '<p class="group-kind">C の項目（' + esc(grp.categoryName) + '）｜' + esc(PE_Scoring.levelLabel(grp.level)) + '</p>'
+        + '<p class="level-def">レベル毎の定義：' + esc(cdef ? cdef.text : '') + '</p>'
+        + '<h3 class="group-title">' + esc(grp.parentName) + '</h3>'
+        + '<p class="hint">' + esc(grp.parentText) + '</p>';
+      if (grp.items.length === 0) {
+        head += '<p class="empty">この項目には ' + esc(PE_Scoring.levelLabel(grp.level)) + ' の実践例がありません。</p>';
+      }
     } else if (grp.domainId === 'professional') {
       var def = PE_Scoring.levelDefinitionOf(grp.level);
       head = '<p class="group-kind">' + esc(ladderTitle(grp.ladderName)) + '｜' + esc(grp.competencyName)
-        + '｜レベル' + esc(PE_Scoring.romanOf(grp.level)) + '</p>'
+        + '｜' + esc(PE_Scoring.levelLabel(grp.level)) + '</p>'
         + '<p class="level-def">レベル毎の定義：' + esc(def ? def.text : '') + '</p>'
         + '<p class="group-kind">レベル毎の目標</p>'
         + '<h3 class="group-title">' + esc(grp.parentText) + '</h3>';
@@ -1111,8 +1222,7 @@
     var domains = PE_Scoring.domainScores(d.items, state.answers, others(), scoreOptions());
     var selfTotal = PE_Scoring.weightedTotal(domains, 'self');
     var otherTotal = PE_Scoring.weightedTotal(domains, 'other');
-    var challengeRoman = PE_Scoring.romanOf(state.profile.challengeLevel);
-    var currentLevel = state.profile.challengeLevel - 1;
+    var bLabel = PE_Scoring.levelLabel(state.profile.challengeLevel);
 
     var html = '<section class="card">'
       + '<h1>ダッシュボード</h1>'
@@ -1128,27 +1238,27 @@
     html += '<div class="btn-row"><a class="btn btn-primary" href="#/input">評価入力へ</a></div>';
     html += '</section>';
 
-    /* 現在のレベルとチャレンジレベル */
-    var def = PE_Scoring.levelDefinitionOf(state.profile.challengeLevel);
+    /* 現在のレベルとチャレンジレベル（B の実践ラダーと C でそれぞれ持つ。R21） */
     html += '<section class="card">'
       + '<h2>現在のレベルとチャレンジレベル</h2>'
-      + '<div class="level-row">'
-      + '<div class="level-box"><p class="level-caption">現在のレベル（認定済み）</p><p class="level-value">'
-      + (currentLevel >= 1 ? 'レベル' + esc(PE_Scoring.romanOf(currentLevel)) : '未認定')
-      + '</p></div>'
-      + '<div class="level-box level-box-target"><p class="level-caption">チャレンジレベル（今期）</p><p class="level-value">レベル'
-      + esc(challengeRoman) + '</p></div>'
-      + '</div>'
-      + '<p class="hint">レベル' + esc(challengeRoman) + 'のレベル毎の定義：' + esc(def ? def.text : '') + '</p>'
-      + '<p class="hint">レベルは専門実践評価にのみ適用されます。基礎評価と各個人の目標はレベル軸を持ちません。</p>'
-      + '<p class="hint">マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）ため、本デモではレベルⅠ固定としています。</p>'
+      + levelRowHtml(domainTitle('professional') + '｜' + ladderTitle(ladderOf('practice') ? ladderOf('practice').name : ''),
+        state.profile.challengeLevel);
+    if (useC()) {
+      html += levelRowHtml(domainTitle('contribution'), state.profile.contributionLevel);
+    }
+    html += explainBlock('level-scope', 'レベルが適用される評価領域について',
+      '<p class="hint">レベルは B と C に適用されます。A と各個人の目標はレベル軸を持ちません。'
+      + 'チャレンジレベルは B の実践ラダーと C で別々に持ち、B のチャレンジレベルは ' + esc(bLabel) + ' です。</p>'
+      + '<p class="hint">マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）ため、本デモでは Lv1 固定としています。</p>'
+      + (useC() ? '' : '<p class="hint">この病院は C を使わない設定のため、C のレベルはありません。</p>'))
       + '</section>';
 
-    /* レベル認定の判定 */
+    /* レベル認定の判定（B の実践ラダー／マネジメントラダー／C を別々に判定する。R21） */
     html += '<section class="card">'
       + '<h2>レベル認定の判定</h2>'
       + explainBlock('cert-criteria', 'レベル認定の判定基準について',
-        '<p class="hint">判定の対象は<strong>専門実践評価のみ</strong>です。基礎評価と各個人の目標はレベル認定に影響しません。'
+        '<p class="hint">判定の対象は<strong>B（実践ラダー・マネジメントラダー）と C</strong>です。それぞれ別々に判定します。'
+        + 'A と各個人の目標はレベル認定に影響しません。'
         + '判定には本人評価を用い、対象の実践例すべてに上位2段階（3・4）がついているかを見ます。'
         + esc(licenseTermOf(d.items)) + 'は判定の対象から外し、担当外・観察機会なしの実践例は未達として扱いません。</p>');
 
@@ -1159,14 +1269,17 @@
     } else {
       var mgmtOff = ladderOf('management');
       html += '<div class="cert-box cert-none">'
-        + '<h3>' + esc(ladderTitle(mgmtOff ? mgmtOff.name : 'マネジメントラダー')) + '</h3>'
+        + '<h3>' + esc(domainTitle('professional')) + '｜' + esc(ladderTitle(mgmtOff ? mgmtOff.name : '')) + '</h3>'
         + '<p>マネジメントラダーを選択していないため、判定は行いません。'
         + '<strong>選択していないことは減点ではありません。</strong>実践ラダーの判定にも影響しません。</p>'
         + '</div>';
     }
+    if (useC()) {
+      html += renderCertification(PE_Scoring.contributionCertification(d.items, state.answers, state.profile));
+    }
     html += '</section>';
 
-    /* 領域別スコア */
+    /* 領域別スコア（C を使わないときは C の行を出さない。R32） */
     html += '<section class="card">'
       + '<h2>領域別スコア</h2>'
       + '<div class="table-wrap"><table class="table">'
@@ -1175,7 +1288,7 @@
       var dm = domains[i];
       html += '<tr>'
         + '<td>' + esc(dm.name) + '</td>'
-        + '<td>' + dm.weight + '％</td>'
+        + '<td class="num">' + esc(fmtPct(dm.weight)) + '％</td>'
         + '<td class="num">' + esc(fmtScore(dm.selfAverage)) + '</td>'
         + '<td class="num">' + esc(fmtScore(dm.otherAverage)) + '</td>'
         + '<td class="num">' + dm.selfCount + ' ／ ' + dm.targetCount + '</td>'
@@ -1196,7 +1309,12 @@
       + '<div class="total-row">'
       + '<div class="total-box"><p class="level-caption">本人評価</p><p class="level-value">' + esc(fmtScore(selfTotal.value)) + '</p></div>'
       + '<div class="total-box"><p class="level-caption">他者評価</p><p class="level-value">' + esc(fmtScore(otherTotal.value)) + '</p></div>'
-      + '</div>';
+      + '</div>'
+      + '<p class="hint">適用している重み：' + esc(weightLabel(effectiveWeights())) + '</p>';
+    /* C を使わないときの再正規化は、開閉の外（常に見える位置）に出す */
+    if (!useC()) {
+      html += '<p class="notice notice-info">' + esc(renormalizeNote()) + '</p>';
+    }
     /* 既定値から調整されている場合は、開閉の外（常に見える位置）に一言出す */
     if (!isDefaultWeight(state.personalWeight)) {
       html += '<p class="notice notice-info">この方の重みは既定値（' + esc(weightShort(PE_defaultPersonalWeight()))
@@ -1215,26 +1333,25 @@
      * 抽出ロジックは PE_Scoring.gaps として js/scoring.js に残してある（呼び出さないだけである）。
      * 領域別スコアの本人評価と他者評価の並記と、チャートの他者評価はスタッフ画面に残す。 */
 
-    /* チャートは領域別スコアと同じ順（基礎評価 → 専門実践評価 → 各個人の目標）に並べる。
-     * 軸の意味が違うため、3領域を1枚にまとめない。 */
+    /* チャートは領域別スコアと同じ順（A → B → C → 各個人の目標）に並べる。
+     * 軸の意味が違うため、領域を1枚にまとめない。 */
 
-    /* チャート：基礎評価（レベル軸を持たない／R26） */
+    /* チャート：A（レベル軸を持たない／R26） */
     html += '<section class="card">'
-      + '<h2>基礎評価の' + PE_MASTER.basicItems.length + 'つの項目</h2>'
+      + '<h2>' + esc(domainTitle('basic')) + 'の' + PE_MASTER.basicItems.length + 'つの項目</h2>'
       + explainBlock('chart-basic', 'このチャートの見方と値の求め方について',
-        '<p class="hint">基礎評価の項目ごとに、本人評価と他者評価を重ねて表示しています。'
-        + '値はその項目に属する実践例の平均です。</p>'
-        + '<p class="hint">現在は各項目に実践例が1つずつのため、表示している値は平均ではなく評価基準の値そのものです。</p>')
+        '<p class="hint">A の項目ごとに、本人評価と他者評価を重ねて表示しています。'
+        + '値はその項目に属する実践例の平均です（実践例が1つの項目は、その評価基準の値そのものです）。</p>')
       + '<div id="radar-basic" class="radar-wrap"></div>'
       + '</section>';
 
-    /* チャート：実践ラダー。見出しに職種名を添え、力の数はマスターから取る（改訂方針C） */
+    /* チャート：B の実践ラダー。見出しに職種名を添え、力の数はマスターから取る */
     var practiceLadder = ladderOf('practice');
     html += '<section class="card">'
-      + '<h2>' + esc(ladderTitle(practiceLadder ? practiceLadder.name : '実践ラダー')) + 'の'
+      + '<h2>' + esc(domainTitle('professional')) + '｜' + esc(ladderTitle(practiceLadder ? practiceLadder.name : '')) + 'の'
       + (practiceLadder ? practiceLadder.competencies.length : 0) + 'つの力</h2>'
       + explainBlock('chart-practice', 'このチャートの見方について',
-        '<p class="hint">チャレンジレベル（レベル' + esc(challengeRoman) + '）の実践例について、'
+        '<p class="hint">B のチャレンジレベル（' + esc(bLabel) + '）の実践例について、'
         + '本人評価と他者評価を重ねて表示しています。軸は職種（' + esc(currentJob().name) + '）の実践ラダーの力です。</p>')
       + '<div id="radar" class="radar-wrap"></div>'
       + '</section>';
@@ -1243,15 +1360,27 @@
      * 非選択のときは枠も「なし」表示も出さない。 */
     if (state.profile.managementLadder) {
       var mgmt = ladderOf('management');
-      var mgmtLevel = PE_Scoring.romanOf(
+      var mgmtLevel = PE_Scoring.levelLabel(
         (mgmt && mgmt.fixedLevel) ? mgmt.fixedLevel : state.profile.challengeLevel
       );
       html += '<section class="card">'
-        + '<h2>' + esc(ladderTitle(mgmt ? mgmt.name : 'マネジメントラダー')) + 'の'
+        + '<h2>' + esc(domainTitle('professional')) + '｜' + esc(ladderTitle(mgmt ? mgmt.name : '')) + 'の'
         + (mgmt ? mgmt.competencies.length : 0) + 'つの力</h2>'
         + explainBlock('chart-management', 'このチャートの見方について',
-          '<p class="hint">レベル' + esc(mgmtLevel) + 'の実践例について、本人評価と他者評価を重ねて表示しています。</p>')
+          '<p class="hint">' + esc(mgmtLevel) + 'の実践例について、本人評価と他者評価を重ねて表示しています。</p>')
         + '<div id="radar-management" class="radar-wrap"></div>'
+        + '</section>';
+    }
+
+    /* チャート：C（使うときだけ出す／R32）。軸は C の6項目 */
+    if (useC()) {
+      html += '<section class="card">'
+        + '<h2>' + esc(domainTitle('contribution')) + 'の' + PE_MASTER.contribution.items.length + 'つの項目</h2>'
+        + explainBlock('chart-contribution', 'このチャートの見方について',
+          '<p class="hint">C のチャレンジレベル（' + esc(PE_Scoring.levelLabel(state.profile.contributionLevel)) + '）の実践例について、'
+          + '項目ごとに本人評価と他者評価を重ねて表示しています。値はその項目の実践例の平均です。'
+          + 'そのレベルの実践例がない項目は「（実践例なし）」と表示し、頂点を置きません。</p>')
+        + '<div id="radar-contribution" class="radar-wrap"></div>'
         + '</section>';
     }
 
@@ -1282,7 +1411,7 @@
     }
     html += '</section>';
 
-    /* 適用外・担当外の件数（画面表記は「要資格（○○）項目」） */
+    /* 適用外・担当外の件数（画面表記は「要資格（○○）項目」）。評価領域ごとの内訳に C を含める */
     var naTerm = licenseTermOf(d.items);
     html += '<section class="card">'
       + '<h2>' + esc(naTerm) + '・担当外の件数</h2>'
@@ -1293,11 +1422,40 @@
       + '<tr><td>担当外・観察機会なし</td><td class="num">' + cnt.unobserved + '</td>'
       + '<td>今期は担当する機会がなかった項目です。評価の対象から外し、平均点の計算にも含めません。</td></tr>'
       + '</tbody></table></div>'
+      + '<p class="hint">評価領域ごとの内訳：' + esc(countBreakdown(cnt, 'notApplicable')) + '（' + esc(naTerm) + '）／'
+      + esc(countBreakdown(cnt, 'unobserved')) + '（担当外・観察機会なし）</p>'
       + '<p class="hint">どちらも「できていない」とは扱いません。'
       + esc(naTerm) + 'は資格要件から自動で判定し、担当外・観察機会なしは本人が選びます。</p>'
       + '</section>';
 
     return html;
+  }
+
+  /* 「A 0件・B 0件・C 1件・各個人の目標 0件」。C を使わないときは C を出さない */
+  function countBreakdown(cnt, key) {
+    var parts = [];
+    var list = PE_Scoring.activeDomains(useC());
+    for (var i = 0; i < list.length; i++) {
+      var b = cnt.byDomain[list[i].id];
+      parts.push(list[i].short + ' ' + (b ? b[key] : 0) + '件');
+    }
+    return parts.join('・');
+  }
+
+  /* 現在のレベルとチャレンジレベルの1行（B・C 共通）。
+   * デモでは「チャレンジレベルの1つ下のレベルを認定済み」として表示する（従来と同じ）。 */
+  function levelRowHtml(title, challengeLevel) {
+    var current = challengeLevel - 1;
+    var def = PE_Scoring.levelDefinitionOf(challengeLevel);
+    return '<h3 class="level-row-title">' + esc(title) + '</h3>'
+      + '<div class="level-row">'
+      + '<div class="level-box"><p class="level-caption">現在のレベル（認定済み）</p><p class="level-value">'
+      + (current >= 1 ? esc(PE_Scoring.levelLabel(current)) : '未認定')
+      + '</p></div>'
+      + '<div class="level-box level-box-target"><p class="level-caption">チャレンジレベル（今期）</p><p class="level-value">'
+      + esc(PE_Scoring.levelLabel(challengeLevel)) + '</p></div>'
+      + '</div>'
+      + '<p class="hint">' + esc(PE_Scoring.levelLabel(challengeLevel)) + 'のレベル毎の定義：' + esc(def ? def.text : '') + '</p>';
   }
 
   function renderCertification(cert) {
@@ -1307,9 +1465,12 @@
     var label = cert.status === 'met' ? '認定の要件を満たす'
       : (cert.status === 'notMet' ? '認定の要件を満たしていない'
         : (cert.status === 'pending' ? '保留' : '対象なし'));
+    var title = cert.kind === 'contribution'
+      ? domainTitle('contribution') + '｜' + cert.levelLabel
+      : domainTitle('professional') + '｜' + ladderTitle(cert.ladderName) + '｜' + cert.levelLabel;
 
     var html = '<div class="cert-box ' + cls + '">'
-      + '<h3>' + esc(ladderTitle(cert.ladderName)) + '｜レベル' + esc(cert.levelRoman) + '</h3>'
+      + '<h3>' + esc(title) + '</h3>'
       + '<p class="cert-status">' + esc(label) + '</p>'
       + '<p>' + esc(cert.message) + '</p>';
 
@@ -1366,19 +1527,25 @@
     var practiceLadder = ladderOf('practice');
     var axes = PE_Scoring.radarAxes(d.items, state.answers, oa, d.master);
     PE_Radar.render(wrap, axes,
-      { ariaLabel: ladderTitle(practiceLadder ? practiceLadder.name : '実践ラダー') + 'の力ごとの本人評価と他者評価のレーダーチャート' });
+      { ariaLabel: domainTitle('professional') + '｜' + ladderTitle(practiceLadder ? practiceLadder.name : '') + 'の力ごとの本人評価と他者評価のレーダーチャート' });
 
     var basic = document.getElementById('radar-basic');
     if (basic) {
       PE_Radar.render(basic, PE_Scoring.basicAxes(d.items, state.answers, oa, d.master),
-        { ariaLabel: '基礎評価の項目ごとの本人評価と他者評価のレーダーチャート' });
+        { ariaLabel: domainTitle('basic') + 'の項目ごとの本人評価と他者評価のレーダーチャート' });
+    }
+
+    var contrib = document.getElementById('radar-contribution');
+    if (contrib) {
+      PE_Radar.render(contrib, PE_Scoring.contributionAxes(d.items, state.answers, oa, d.master),
+        { ariaLabel: domainTitle('contribution') + 'の項目ごとの本人評価と他者評価のレーダーチャート' });
     }
 
     var mgmt = document.getElementById('radar-management');
     if (mgmt) {
       var mgmtLadder = ladderOf('management');
       PE_Radar.render(mgmt, PE_Scoring.ladderAxes(d.items, state.answers, oa, d.master, 'management'),
-        { ariaLabel: ladderTitle(mgmtLadder ? mgmtLadder.name : 'マネジメントラダー') + 'の力ごとの本人評価と他者評価のレーダーチャート' });
+        { ariaLabel: domainTitle('professional') + '｜' + ladderTitle(mgmtLadder ? mgmtLadder.name : '') + 'の力ごとの本人評価と他者評価のレーダーチャート' });
     }
 
     /* 各個人の目標：合意した目標ごとに1枚。凡例は最後の1枚にだけ付ける */
@@ -1401,9 +1568,12 @@
     var goals = state.personalGoals.goals;
     var html = '<p class="notice notice-warn">病院の既定値は ' + esc(weightLabel(def)) + 'です。'
       + 'これは<strong>暫定値</strong>であり、試行運用の結果をふまえて確定します。</p>'
-      + '<p class="hint">この方に適用されている重みは <strong>' + esc(weightLabel(w)) + '</strong> です'
+      + '<p class="hint">この方に設定されている重みは <strong>' + esc(weightLabel(w)) + '</strong> です'
       + (isDefaultWeight(w) ? '（既定値のまま）。' : '（既定値から調整）。')
-      + '個人ごとの重みは上位職または病院内管理者が調整します。</p>';
+      + '個人ごとの重みは上位職または病院内管理者が調整します。</p>'
+      + (useC() ? '' : '<p class="hint">' + esc(renormalizeNote()) + '</p>')
+      + '<p class="hint">重み付き総合スコア ＝ Σ（領域別スコア × 適用している重み）÷ 適用している重みの合計。'
+      + 'A・B・C は性質が異なるため、領域別スコアを並べたうえで重みで合成しています。</p>';
     if (goals.length > 0) {
       html += '<p class="hint">各個人の目標の中では、合意した目標ごとに重みを持ちます。</p><ul class="weight-list">';
       for (var i = 0; i < goals.length; i++) {
@@ -1420,17 +1590,23 @@
 
   function viewMypage() {
     var currentLevel = state.profile.challengeLevel - 1;
+    var cCurrent = state.profile.contributionLevel - 1;
     var html = '<section class="card">'
       + '<h1>マイページ</h1>'
       + '<p class="notice notice-warn">表示している氏名・職種・評価はすべて<strong>架空のデモ用データ</strong>です。</p>'
       + '<dl class="kv">'
       + '<dt>氏名</dt><dd>' + esc(state.profile.name) + '（架空）</dd>'
       + '<dt>職種</dt><dd>' + esc(currentJob().name)
-      + '<span class="dd-note">職種によって実践ラダーとマネジメントラダーが決まります。レベル毎の定義と基礎評価は全職種共通です。</span></dd>'
+      + '<span class="dd-note">職種によって B（' + esc(domainTitle('professional')) + '）の実践ラダーとマネジメントラダーが決まります。'
+      + 'レベル毎の定義・A・C は全職種共通です。</span></dd>'
       + '<dt>マネジメントラダー</dt><dd>' + (state.profile.managementLadder ? '選択する' : '選択しない')
       + '<span class="dd-note">マネジメントラダーは任意です。選択しないこと、途中でやめることを減点として扱いません（R20）。</span></dd>'
-      + '<dt>現在のレベル</dt><dd>' + (currentLevel >= 1 ? 'レベル' + esc(PE_Scoring.romanOf(currentLevel)) : '未認定') + '</dd>'
-      + '<dt>チャレンジレベル</dt><dd>レベル' + esc(PE_Scoring.romanOf(state.profile.challengeLevel)) + '</dd>'
+      + '<dt>B の現在のレベル（実践ラダー）</dt><dd>' + (currentLevel >= 1 ? esc(PE_Scoring.levelLabel(currentLevel)) : '未認定') + '</dd>'
+      + '<dt>B のチャレンジレベル（実践ラダー）</dt><dd>' + esc(PE_Scoring.levelLabel(state.profile.challengeLevel)) + '</dd>'
+      + (useC()
+        ? '<dt>C の現在のレベル</dt><dd>' + (cCurrent >= 1 ? esc(PE_Scoring.levelLabel(cCurrent)) : '未認定') + '</dd>'
+          + '<dt>C のチャレンジレベル</dt><dd>' + esc(PE_Scoring.levelLabel(state.profile.contributionLevel)) + '</dd>'
+        : '<dt>C のレベル</dt><dd>この病院は C を使わない設定のため、C のレベルはありません。</dd>')
       + '<dt>ログイン中の ID</dt><dd>' + esc(state.session ? state.session.email : '') + '</dd>'
       + '</dl>'
       + '</section>';
@@ -1438,28 +1614,37 @@
     html += '<section class="card">'
       + '<h2>レベル認定の履歴</h2>'
       + '<p class="hint">デモでは1期分のみを表示します。</p>';
+    var historyRows = '';
     if (currentLevel >= 1) {
-      html += '<div class="table-wrap"><table class="table">'
-        + '<thead><tr><th>評価期間</th><th>ラダー</th><th>レベル</th><th>結果</th></tr></thead><tbody>'
-        + '<tr><td>前期（架空）</td><td>' + esc(ladderTitle(ladderOf('practice') ? ladderOf('practice').name : '実践ラダー')) + '</td><td>レベル' + esc(PE_Scoring.romanOf(currentLevel)) + '</td><td>認定</td></tr>'
-        + '</tbody></table></div>';
-    } else {
-      html += '<p class="empty">認定の履歴はありません。レベルⅠに挑戦中です。</p>';
+      historyRows += '<tr><td>前期（架空）</td><td>' + esc(domainTitle('professional')) + '｜'
+        + esc(ladderTitle(ladderOf('practice') ? ladderOf('practice').name : '')) + '</td><td>'
+        + esc(PE_Scoring.levelLabel(currentLevel)) + '</td><td>認定</td></tr>';
     }
+    if (useC() && cCurrent >= 1) {
+      historyRows += '<tr><td>前期（架空）</td><td>' + esc(domainTitle('contribution')) + '</td><td>'
+        + esc(PE_Scoring.levelLabel(cCurrent)) + '</td><td>認定</td></tr>';
+    }
+    if (historyRows) {
+      html += '<div class="table-wrap"><table class="table">'
+        + '<thead><tr><th>評価期間</th><th>対象</th><th>レベル</th><th>結果</th></tr></thead><tbody>'
+        + historyRows + '</tbody></table></div>';
+    }
+    if (currentLevel < 1) html += '<p class="empty">B の認定の履歴はありません。Lv1 に挑戦中です。</p>';
+    if (useC() && cCurrent < 1) html += '<p class="empty">C の認定の履歴はありません。Lv1 に挑戦中です。</p>';
     html += '</section>';
 
     html += viewMypageGoals();
 
     html += '<section class="card">'
       + '<h2>レベル毎の定義</h2>'
-      + '<p class="hint">レベル毎の定義は専門実践評価にのみ適用され、実践ラダーとマネジメントラダーで共通です。'
-      + '職種によっても変わりません。</p>'
+      + '<p class="hint">レベル毎の定義は B（実践ラダー・マネジメントラダー）と C に共通の1組です。'
+      + '職種によっても変わりません。A と各個人の目標には適用しません。</p>'
       + '<div class="table-wrap"><table class="table">'
       + '<thead><tr><th>レベル</th><th>定義文</th><th>判別の目安</th></tr></thead><tbody>';
     for (var i = 0; i < PE_LEVEL_DEFINITIONS.length; i++) {
       var ld = PE_LEVEL_DEFINITIONS[i];
       html += '<tr' + (ld.level === state.profile.challengeLevel ? ' class="row-current"' : '') + '>'
-        + '<td>レベル' + esc(ld.roman) + '</td><td>' + esc(ld.text) + '</td><td>' + esc(ld.hint) + '</td></tr>';
+        + '<td>' + esc(ld.label) + '</td><td>' + esc(ld.text) + '</td><td>' + esc(ld.hint) + '</td></tr>';
     }
     html += '</tbody></table></div></section>';
 
@@ -1483,16 +1668,18 @@
       + '<h2>各個人の目標と重み</h2>'
       + '<p class="hint">合意した目標は本人と上位職の面談で決め、重みは上位職または病院内管理者が設定します。'
       + 'この画面では参照のみです（デモでは設定画面の「各個人の目標（デモ用の編集）」で変更できます）。</p>'
-      + '<h3 class="sub-heading">3領域の重み</h3>'
+      + '<h3 class="sub-heading">評価領域の重み</h3>'
       + '<div class="table-wrap"><table class="table">'
       + '<thead><tr><th>評価領域</th><th>適用されている重み</th><th>病院の既定値</th></tr></thead><tbody>';
+    var eff = effectiveWeights();
     for (var i = 0; i < PE_DOMAINS.length; i++) {
       var id = PE_DOMAINS[i].id;
-      html += '<tr><td>' + esc(PE_DOMAINS[i].name) + '</td>'
-        + '<td class="num">' + esc(w[id]) + '％</td>'
+      html += '<tr><td>' + esc(domainTitle(id)) + '</td>'
+        + '<td class="num">' + (typeof eff[id] === 'number' ? esc(fmtPct(eff[id])) + '％' : '使わない') + '</td>'
         + '<td class="num">' + esc(def[id]) + '％</td></tr>';
     }
     html += '</tbody></table></div>';
+    if (!useC()) html += '<p class="notice notice-info">' + esc(renormalizeNote()) + '</p>';
     if (!isDefaultWeight(w)) {
       html += '<p class="notice notice-info">この方の重みは既定値（' + esc(weightShort(def)) + '）から調整されています。</p>';
     }
@@ -1526,7 +1713,8 @@
     var html = '<section class="card">'
       + '<h1>設定</h1>'
       + '<p class="notice notice-info">この設定画面は<strong>デモ専用</strong>です。'
-      + '本番では職種はアカウントに登録されたものを使い、マネジメントラダーの選択とチャレンジレベルは面談で決めます。'
+      + '本番では職種はアカウントに登録されたものを使い、マネジメントラダーの選択とチャレンジレベル（B・C）は面談で決め、'
+      + 'C を使うかと C の実践例は病院内管理者が設定します。'
       + '設定を変えると、回答対象とダッシュボードの表示がその場で切り替わります。</p>'
       + '<p class="progress-text">現在の回答対象：' + prog.total + '項目（' + esc(licenseTermOf(d.items)) + 'を除く）</p>'
       + '</section>';
@@ -1546,26 +1734,50 @@
       + '（職種：' + esc(currentJob().name) + '）。</p>'
       + '</section>';
 
+    /* チャレンジレベルは B の実践ラダーと C で別々に持つ（R21） */
     html += '<section class="card">'
-      + '<h2>チャレンジレベル</h2>'
+      + '<h2>B のチャレンジレベル</h2>'
       + '<div class="seg seg-level">';
     for (var i = 0; i < PE_LEVEL_DEFINITIONS.length; i++) {
       var ld = PE_LEVEL_DEFINITIONS[i];
-      html += segButton('level', String(ld.level), 'レベル' + ld.roman, state.profile.challengeLevel === ld.level);
+      html += segButton('level', String(ld.level), ld.label, state.profile.challengeLevel === ld.level);
     }
     html += '</div>'
-      + '<p class="hint">チャレンジレベルは<strong>実践ラダー</strong>の回答対象に適用されます。'
-      + 'マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）ため、本デモではレベルⅠ固定です。</p>'
-      + '<p class="hint">基礎評価はレベル軸を持たないため、チャレンジレベルを変えても'
-      + PE_MASTER.basicItems.length + '項目のまま変わりません（R26）。</p>'
+      + '<p class="hint">B のチャレンジレベルは<strong>' + esc(domainTitle('professional')) + 'の実践ラダー</strong>の回答対象に適用されます。'
+      + 'マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）ため、本デモでは Lv1 固定です。</p>'
+      + '<p class="hint">A はレベル軸を持たないため、チャレンジレベルを変えても'
+      + PE_MASTER.basicItems.length + 'つの項目のまま変わりません（R26）。</p>'
       + '</section>';
+
+    html += '<section class="card">'
+      + '<h2>C のチャレンジレベル</h2>';
+    if (useC()) {
+      html += '<div class="seg seg-level">';
+      for (var ci = 0; ci < PE_LEVEL_DEFINITIONS.length; ci++) {
+        var cld = PE_LEVEL_DEFINITIONS[ci];
+        html += segButton('clevel', String(cld.level), cld.label, state.profile.contributionLevel === cld.level);
+      }
+      html += '</div>'
+        + '<p class="hint">C のチャレンジレベルは<strong>' + esc(domainTitle('contribution')) + '</strong>の回答対象に適用されます。'
+        + 'B のチャレンジレベルとは別に持ち、C のレベル認定もこのレベルで判定します（R21）。</p>';
+      if (cPracticesAt(state.profile.contributionLevel).length === 0) {
+        html += '<p class="notice notice-warn">病院の設定に ' + esc(PE_Scoring.levelLabel(state.profile.contributionLevel))
+          + ' の C の実践例が1件もないため、C の回答対象はありません。C のレベル認定は「対象なし」になります。</p>';
+      }
+    } else {
+      html += '<p class="hint">この病院は C を使わない設定のため、C のチャレンジレベルはありません。'
+        + '下の「' + esc(domainTitle('contribution')) + '（病院の設定・デモ用）」で「使う」にすると選べます。</p>';
+    }
+    html += '</section>';
 
     html += viewPersonalGoalSettings(d);
 
+    html += viewContributionSettings();
+
     html += '<section class="card">'
       + '<h2>データリセット</h2>'
-      + '<p class="hint">localStorage を初期化し、回答・設定・合意した目標・重み・セッションをすべて消します。'
-      + '合意した目標はプリセットの1件に、重みは既定値に戻ります。この操作は取り消せません。</p>'
+      + '<p class="hint">localStorage を初期化し、回答・設定・合意した目標・重み・病院の設定（C）・セッションをすべて消します。'
+      + '合意した目標はプリセットの1件に、重みは既定値に、C は「使う」と既定の実践例に戻ります。この操作は取り消せません。</p>'
       + '<button type="button" class="btn btn-danger" data-action="reset">データをリセットする</button>'
       + '</section>';
 
@@ -1596,8 +1808,9 @@
       html += segButton('jobtype', jt.id, jt.name, jt.id === job.id);
     }
     html += '</div>'
-      + '<p class="hint">職種を切り替えると、実践ラダーとマネジメントラダーが入れ替わります。'
-      + 'レベル毎の定義と基礎評価は全職種共通です。本番では職種はアカウントに登録されたものを使います。</p>'
+      + '<p class="hint">職種を切り替えると、B の実践ラダーとマネジメントラダーと B の表示名が入れ替わります。'
+      + 'レベル毎の定義・A・C は全職種共通です。本番では職種はアカウントに登録されたものを使います。</p>'
+      + '<p class="hint">現在の B：<strong>' + esc(domainTitle('professional')) + '</strong></p>'
       + '<p class="hint">現在の実践ラダーの力：<strong>' + esc(competencyNames(practiceComps, '／')) + '</strong></p>'
       + '<p class="hint">各個人の目標と重みは本人に属するため、職種を切り替えても変わりません。'
       + '職種ごとの回答はそれぞれ保存され、切り替えて戻すと元の回答が残っています。</p>'
@@ -1619,37 +1832,42 @@
       + '<p class="notice notice-info">本番では、合意した目標は本人と上位職の面談で決め、'
       + '重みは上位職または病院内管理者が設定します。スタッフは参照のみです。'
       + 'デモでは挙動を確認するため、ここで編集できます。</p>'
-      + '<div class="progress-box">' + limitSummaryHtml(d.items) + '</div>';
+      + '<div class="progress-box">' + questionSummaryHtml(d.items) + '</div>';
     if (flash) {
       html += '<p class="notice notice-ok goal-flash" role="status">' + esc(flash.text) + '</p>';
     }
 
-    /* 3領域の重み */
-    html += '<h3 class="sub-heading">3領域の重み</h3>'
+    /* 4領域の重み */
+    html += '<h3 class="sub-heading">4領域の重み</h3>'
       + '<p class="hint">病院の既定値（' + esc(weightLabel(PE_defaultPersonalWeight())) + '・暫定値）に、個人ごとの調整を重ねます。'
-      + '各値は 0〜100 の整数で、合計を100％にしてください。</p>'
-      + '<div class="weight-grid">';
+      + '各値は 0〜100 の整数で、合計を100％にしてください。</p>';
+    if (!useC()) {
+      html += '<p class="notice notice-info">' + esc(renormalizeNote())
+        + '下の C の値は、C を使う設定に戻したときに使います。</p>';
+    }
+    html += '<div class="weight-grid">';
     for (var i = 0; i < PE_DOMAINS.length; i++) {
       var dm = PE_DOMAINS[i];
       html += '<div class="weight-field">'
-        + '<label for="dw-' + esc(dm.id) + '">' + esc(dm.name) + '</label>'
+        + '<label for="dw-' + esc(dm.id) + '">' + esc(domainTitle(dm.id)) + '</label>'
         + '<span class="weight-input"><input type="number" inputmode="numeric" min="0" max="100" step="1"'
         + ' id="dw-' + esc(dm.id) + '" data-role="domain-weight" value="' + esc(w[dm.id]) + '"><span aria-hidden="true">％</span></span>'
         + '</div>';
     }
     html += '</div>'
-      + '<p class="weight-sum" id="domain-weight-sum">合計 ' + (w.basic + w.professional + w.personal) + '％</p>'
+      + '<p class="weight-sum" id="domain-weight-sum">合計 ' + sumDomainWeights(w) + '％</p>'
       + '<p class="form-error" id="domain-weight-error" role="alert" hidden></p>'
       + '<div class="btn-row">'
-      + '<button type="button" class="btn btn-primary" data-action="domain-weights-save">3領域の重みを保存</button>'
+      + '<button type="button" class="btn btn-primary" data-action="domain-weights-save">4領域の重みを保存</button>'
       + '<button type="button" class="btn" data-action="domain-weights-default">既定値（' + esc(weightShort(PE_defaultPersonalWeight())) + '）に戻す</button>'
       + '</div>'
       + '<p class="hint">現在の状態：' + (isDefaultWeight(w) ? '既定値のまま' : '<strong>既定値から調整されています</strong>') + '</p>';
 
     /* 合意した目標の一覧 */
     html += '<h3 class="sub-heading">合意した目標（' + goals.length + '件）</h3>'
-      + '<p class="hint">合意した目標は個数の上限なく作れます（R28）。目標ごとの重みは目標どうしの比率（％）で入れ、合計を100％にします。'
-      + '総合スコアに占める割合は「目標内の重み × 各個人の目標の重み（' + esc(w.personal) + '％）」で自動計算します。</p>';
+      + '<p class="notice notice-info">重点目標（合意した目標）は1〜3個が目安です。個数に上限はありません（R28）。</p>'
+      + '<p class="hint">目標ごとの重みは目標どうしの比率（％）で入れ、合計を100％にします。'
+      + '総合スコアに占める割合は「目標内の重み × 各個人の目標の重み（' + esc(fmtPct(effectiveWeights().personal)) + '％）」で自動計算します。</p>';
     if (goals.length === 0) {
       html += '<p class="notice notice-warn">合意した目標がありません。各個人の目標の領域に回答対象がなくなり、'
         + '重み付き総合スコアは各個人の目標の重みを除いて算出します。</p>';
@@ -1687,6 +1905,12 @@
     }
     html += '</section>';
     return html;
+  }
+
+  function sumDomainWeights(w) {
+    var s = 0;
+    for (var i = 0; i < PE_DOMAINS.length; i++) s += (typeof w[PE_DOMAINS[i].id] === 'number') ? w[PE_DOMAINS[i].id] : 0;
+    return s;
   }
 
   function sumGoalWeights() {
@@ -1751,6 +1975,208 @@
         + '文を直しただけの実践例は、回答をそのまま引き継ぎます。</p>';
     }
     return html;
+  }
+
+  /* ---------------- C（病院の設定・デモ用）：編集 ----------------
+   * 本番では、C を使うかどうかと C の実践例は病院内管理者が設定する（R32）。
+   * デモでは挙動を確認するため、設定画面で編集できる。
+   * C の項目（6つ）の名前と意味は全病院共通の固定部分であり、ここでは編集させない。
+   * 実践例は C の項目 × レベル（Lv1〜Lv4）ごとに追加・編集・削除でき、空欄は保存しない。
+   * 実践例を削除したら、その実践例に対する本人評価の回答も削除する（各個人の目標と同じ扱い）。 */
+
+  function findCPractice(id) {
+    var list = state.hospital.practices;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+
+  /* 病院が追加した C の実践例は cp_u…（既定の実践例のIDと接頭辞で区別する） */
+  function newCId(used) {
+    var id;
+    do {
+      state.hospital.seq = (state.hospital.seq || 0) + 1;
+      id = 'cp_u' + Date.now().toString(36) + '_' + state.hospital.seq.toString(36);
+    } while (used[id]);
+    used[id] = true;
+    return id;
+  }
+
+  function cEditingLevel() {
+    return (cEditLevel !== null && [1, 2, 3, 4].indexOf(cEditLevel) !== -1) ? cEditLevel : state.profile.contributionLevel;
+  }
+
+  function openCEditor(itemId, level, practiceId) {
+    var p = practiceId ? findCPractice(practiceId) : null;
+    if (practiceId && !p) return;
+    cEditor = { practiceId: p ? p.id : null, itemId: itemId, level: level, text: p ? p.text : '', error: '' };
+  }
+
+  function levelEmptyNote(level) {
+    return cPracticesAt(level).length === 0
+      ? PE_Scoring.levelLabel(level) + ' の C の実践例が0件になりました。C のチャレンジレベルが '
+        + PE_Scoring.levelLabel(level) + ' の人には C の回答対象がなく、C のレベル認定は「対象なし」になります。'
+      : '';
+  }
+
+  function saveCEditor() {
+    var ed = cEditor;
+    if (!ed) return false;
+    var text = String(ed.text || '').trim();
+    if (!text) { ed.error = '空欄の実践例は保存できません。文を入力してください。'; return false; }
+    if (ed.practiceId) {
+      var p = findCPractice(ed.practiceId);
+      if (!p) { cEditor = null; return true; }
+      /* IDは変えない（回答を引き継ぐ）。文を変えたときだけ出所を user にする */
+      if (p.text !== text) p.source = 'user';
+      p.text = text;
+      saveHospital();
+      cFlash = { text: 'C の実践例を保存しました。この実践例に対する回答はそのまま引き継ぎます。' };
+    } else {
+      var used = collectUsedIds();
+      state.hospital.practices.push({ id: newCId(used), itemId: ed.itemId, level: ed.level, text: text, source: 'user' });
+      saveHospital();
+      cFlash = { text: 'C の実践例を追加しました（' + PE_Scoring.levelLabel(ed.level) + '）。' };
+    }
+    cEditor = null;
+    return true;
+  }
+
+  function deleteCPractice(id) {
+    var p = findCPractice(id);
+    if (!p) return;
+    state.hospital.practices = state.hospital.practices.filter(function (x) { return x.id !== id; });
+    saveHospital();
+    var removed = removeAnswersFor([id]);
+    if (cEditor && cEditor.practiceId === id) cEditor = null;
+    cFlash = { text: 'C の実践例を削除しました。その実践例に対する本人評価の回答（' + removed + '件）も削除しました。'
+      + levelEmptyNote(p.level) };
+  }
+
+  /* 既定の実践例に戻す。既定に無いID（病院が追加したもの）の回答は削除する。
+   * 既定の実践例と同じIDの回答は残す（公開サイトの閲覧者の回答を消さないため）。 */
+  function resetCDefaults() {
+    var defaults = PE_defaultContributionPractices();
+    var keep = {};
+    for (var i = 0; i < defaults.length; i++) keep[defaults[i].id] = true;
+    var removedIds = [];
+    for (var j = 0; j < state.hospital.practices.length; j++) {
+      if (!keep[state.hospital.practices[j].id]) removedIds.push(state.hospital.practices[j].id);
+    }
+    state.hospital.practices = defaults;
+    saveHospital();
+    var removed = removeAnswersFor(removedIds);
+    cEditor = null;
+    cFlash = { text: 'C の実践例を既定の実践例（' + defaults.length + '件）に戻しました。'
+      + (removedIds.length > 0 ? '病院が追加した実践例（' + removedIds.length + '件）に対する本人評価の回答（' + removed + '件）も削除しました。' : '') };
+  }
+
+  function setUseContribution(on) {
+    state.hospital.useContribution = !!on;
+    saveHospital();
+    cFlash = {
+      text: on
+        ? 'C を使う設定にしました。C の回答対象・チャレンジレベル・レベル認定・チャートを表示し、重みは4領域で集計します。'
+        : 'C を使わない設定にしました。C の回答対象・チャレンジレベル・レベル認定・チャートは出しません。' + renormalizeNote()
+          + 'C の回答は消さずに残しています。'
+    };
+  }
+
+  function viewContributionSettings() {
+    var flash = cFlash;
+    cFlash = null;
+    var level = cEditingLevel();
+    var C = PE_MASTER.contribution;
+    var html = '<section class="card" id="contribution-settings">'
+      + '<h2>' + esc(domainTitle('contribution')) + '（病院の設定・デモ用）</h2>'
+      + '<p class="notice notice-info">本番では、C を使うかどうかと C の実践例は病院内管理者が設定します。'
+      + 'デモでは挙動を確認するため、ここで編集できます。</p>';
+    if (flash) html += '<p class="notice notice-ok goal-flash" role="status">' + esc(flash.text) + '</p>';
+
+    html += '<h3 class="sub-heading">C を使うか</h3>'
+      + '<div class="seg">'
+      + segButton('cuse', 'true', '使う', useC())
+      + segButton('cuse', 'false', '使わない', !useC())
+      + '</div>'
+      + '<p class="hint">使わないにすると、C の回答対象・チャレンジレベル・レベル認定・チャート・領域別スコアの行を出さず、'
+      + '重みは C の分を除いて残りの比率を保ったまま再正規化します。C の回答は消さずに残し、「使う」に戻すと再び表示されます。</p>';
+
+    html += '<h3 class="sub-heading">C の実践例</h3>'
+      + '<p class="hint">C の項目（' + C.items.length + 'つ）の名前と意味は全病院共通で、編集できません。'
+      + '実践例は項目 × レベルごとに追加・編集・削除できます。実践例自身がレベルを持ちます（レベル毎の目標は置きません）。</p>'
+      + '<p class="c-level-caption" id="c-level-caption">表示するレベル</p>'
+      + '<div class="seg seg-level" role="group" aria-labelledby="c-level-caption">';
+    for (var i = 0; i < PE_LEVEL_DEFINITIONS.length; i++) {
+      var ld = PE_LEVEL_DEFINITIONS[i];
+      html += segButton('cedit-level', String(ld.level), ld.label + '（' + cPracticesAt(ld.level).length + '件）', level === ld.level);
+    }
+    html += '</div>';
+    var def = PE_Scoring.levelDefinitionOf(level);
+    html += '<p class="hint">' + esc(PE_Scoring.levelLabel(level)) + 'のレベル毎の定義：' + esc(def ? def.text : '') + '</p>';
+    if (cPracticesAt(level).length === 0) {
+      html += '<p class="notice notice-warn">' + esc(PE_Scoring.levelLabel(level)) + ' の実践例が0件です。'
+        + 'C のチャレンジレベルが ' + esc(PE_Scoring.levelLabel(level)) + ' の人には C の回答対象がなく、'
+        + 'C のレベル認定は「対象なし」になります。</p>';
+    }
+
+    var lastCat = null;
+    for (var c = 0; c < C.items.length; c++) {
+      var item = C.items[c];
+      if (item.category !== lastCat) {
+        lastCat = item.category;
+        var catName = '';
+        for (var k = 0; k < C.categories.length; k++) if (C.categories[k].id === item.category) catName = C.categories[k].name;
+        html += '<h4 class="category-heading">' + esc(catName) + '</h4>';
+      }
+      var list = cPracticesAt(level, item.id);
+      html += '<div class="goal-panel c-item-panel">'
+        + '<p class="goal-text">' + esc((item.mark || '') + item.name) + '</p>'
+        + '<p class="goal-weight-note">' + esc(item.description) + '</p>'
+        + '<p class="goal-items-title">' + esc(PE_Scoring.levelLabel(level)) + ' の実践例（' + list.length + '件）</p>';
+      if (list.length === 0) html += '<p class="empty">この項目には ' + esc(PE_Scoring.levelLabel(level)) + ' の実践例がありません。</p>';
+      html += '<ul class="c-practice-list">';
+      for (var p = 0; p < list.length; p++) {
+        if (cEditor && cEditor.practiceId === list[p].id) {
+          html += '<li class="c-practice c-practice-editing">' + cEditorHtml() + '</li>';
+        } else {
+          html += '<li class="c-practice">'
+            + '<p class="c-practice-text">' + esc(list[p].text) + '</p>'
+            + '<div class="btn-row">'
+            + '<button type="button" class="btn" data-action="c-edit" data-practice="' + esc(list[p].id) + '">編集</button>'
+            + '<button type="button" class="btn btn-danger-outline" data-action="c-delete" data-practice="' + esc(list[p].id) + '">削除</button>'
+            + '</div></li>';
+        }
+      }
+      html += '</ul>';
+      if (cEditor && !cEditor.practiceId && cEditor.itemId === item.id && cEditor.level === level) {
+        html += '<div class="c-practice c-practice-editing">' + cEditorHtml() + '</div>';
+      } else {
+        html += '<div class="btn-row"><button type="button" class="btn" data-action="c-add" data-item="' + esc(item.id) + '"'
+          + ' data-level="' + level + '">実践例を追加</button></div>';
+      }
+      html += '</div>';
+    }
+
+    html += '<div class="btn-row">'
+      + '<button type="button" class="btn" data-action="c-reset-defaults">既定の実践例に戻す</button>'
+      + '</div>'
+      + '<p class="hint">既定の実践例（' + C.defaultPractices.length + '件・暫定案）に戻します。'
+      + '病院が追加した実践例は削除し、その回答も削除します。実践例を削除すると、その実践例に対する本人評価の回答も削除します。'
+      + '文を直しただけの実践例は、回答をそのまま引き継ぎます。</p>'
+      + '</section>';
+    return html;
+  }
+
+  function cEditorHtml() {
+    var ed = cEditor;
+    return '<div class="field">'
+      + '<label for="ce-text">' + (ed.practiceId ? '実践例を編集' : '実践例を追加') + '（' + esc(PE_Scoring.levelLabel(ed.level)) + '）</label>'
+      + '<textarea id="ce-text" rows="3" data-role="ce-text" placeholder="例：観察できる行動を1文で書きます">' + esc(ed.text) + '</textarea>'
+      + '</div>'
+      + '<p class="form-error" id="ce-error" role="alert"' + (ed.error ? '' : ' hidden') + '>' + esc(ed.error) + '</p>'
+      + '<div class="btn-row">'
+      + '<button type="button" class="btn btn-primary" data-action="ce-save">この実践例を保存</button>'
+      + '<button type="button" class="btn" data-action="ce-cancel">取り消す</button>'
+      + '</div>';
   }
 
   /* デモの見た目（比較用）：配色が決まったらこの関数ごと削除する */
@@ -1822,8 +2248,67 @@
       return;
     }
     if (action === 'set-level') {
+      /* B のチャレンジレベル（実践ラダー） */
       state.profile.challengeLevel = parseInt(btn.getAttribute('data-value'), 10);
       saveProfile(); render(); return;
+    }
+    if (action === 'set-clevel') {
+      /* C のチャレンジレベル（B とは別に持つ。R21） */
+      var cl = parseInt(btn.getAttribute('data-value'), 10);
+      if ([1, 2, 3, 4].indexOf(cl) !== -1) {
+        state.profile.contributionLevel = cl;
+        cEditLevel = null;
+        saveProfile(); renderKeepScroll();
+      }
+      return;
+    }
+    /* ---- C（病院の設定・デモ用） ---- */
+    if (action === 'set-cuse') {
+      setUseContribution(btn.getAttribute('data-value') === 'true');
+      renderKeepScroll();
+      return;
+    }
+    if (action === 'set-cedit-level') {
+      var el = parseInt(btn.getAttribute('data-value'), 10);
+      if ([1, 2, 3, 4].indexOf(el) !== -1) { cEditLevel = el; cEditor = null; }
+      renderKeepScroll();
+      return;
+    }
+    if (action === 'c-add') {
+      openCEditor(btn.getAttribute('data-item'), parseInt(btn.getAttribute('data-level'), 10), null);
+      renderKeepScroll('ce-text');
+      return;
+    }
+    if (action === 'c-edit') {
+      var ep = findCPractice(btn.getAttribute('data-practice'));
+      if (ep) { openCEditor(ep.itemId, ep.level, ep.id); renderKeepScroll('ce-text'); }
+      return;
+    }
+    if (action === 'c-delete') {
+      var dp = findCPractice(btn.getAttribute('data-practice'));
+      if (dp && window.confirm('C の実践例「' + dp.text + '」を削除します。'
+        + 'その実践例に対する本人評価の回答も削除します。よろしいですか？')) {
+        deleteCPractice(dp.id);
+        renderKeepScroll();
+      }
+      return;
+    }
+    if (action === 'ce-save') {
+      if (saveCEditor()) renderKeepScroll();
+      else showFieldError('ce-error', cEditor ? cEditor.error : '');
+      return;
+    }
+    if (action === 'ce-cancel') {
+      cEditor = null;
+      renderKeepScroll();
+      return;
+    }
+    if (action === 'c-reset-defaults') {
+      if (window.confirm('C の実践例を既定の実践例に戻します。病院が追加した実践例は削除し、その回答も削除します。よろしいですか？')) {
+        resetCDefaults();
+        renderKeepScroll();
+      }
+      return;
     }
     /* ---- 各個人の目標（デモ用の編集） ----
      * 提出状態は変えない（既存の設定変更と同じ扱い）。 */
@@ -1900,7 +2385,7 @@
       return;
     }
     if (action === 'reset') {
-      if (window.confirm('localStorage を初期化します。回答・設定・合意した目標・重み・セッションがすべて消えます。よろしいですか？')) {
+      if (window.confirm('localStorage を初期化します。回答・設定・合意した目標・重み・病院の設定（C）・セッションがすべて消えます。よろしいですか？')) {
         resetAll(true);
         go('login');
         render();
@@ -1945,6 +2430,7 @@
     if (role === 'domain-weight') { refreshDomainWeightSum(); showFieldError('domain-weight-error', ''); return; }
     if (role === 'goal-weight') { refreshGoalWeightSum(); showFieldError('goal-weight-error', ''); return; }
     if (role === 'ge-text') { if (goalEditor) goalEditor.text = el.value; return; }
+    if (role === 'ce-text') { if (cEditor) { cEditor.text = el.value; showFieldError('ce-error', ''); } return; }
     if (role === 'ge-item') {
       var idx = parseInt(el.getAttribute('data-index'), 10);
       if (goalEditor && goalEditor.items[idx]) goalEditor.items[idx].text = el.value;
