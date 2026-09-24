@@ -2,7 +2,8 @@
  * 回答対象の組み立て・集計・レベル認定の判定。
  *
  * 集計の約束
- *  - 適用外（資格要件を満たさない実践例）は分母から外す。
+ *  - 適用外（資格要件を満たさない実践例）は分母から外す。資格の有無は職種の保有資格で決まる（R6・改訂方針C）。
+ *  - 専門実践評価のラダーは職種ごとに1組。master には PE_masterFor(職種ID) の戻り値を渡す（R19・R31）。
  *  - 担当外・観察機会なしは低評価と区別し、分母から外す。
  *  - 有効な回答が0件の評価領域は平均を「—」とし、重み付き総合スコアからも外して
  *    残りの重みを再正規化する。
@@ -46,6 +47,13 @@ var PE_Scoring = (function () {
     return list ? '要資格（' + list + '）項目' : '要資格項目';
   }
 
+  /* 本人の保有資格。職種のマスターの licenses から決まる（改訂方針C・R6）。
+   * 職種を持たないマスターを渡した場合は資格なしとして扱う。 */
+  function heldLicensesOf(master) {
+    var job = master && master.jobType;
+    return (job && job.licenses && job.licenses.slice) ? job.licenses.slice() : [];
+  }
+
   /* 回答対象の実践例を、親（基礎評価の項目／レベル毎の目標／合意した目標）ごとの
    * グループとして組み立てる（R2）。
    * personalGoals を渡した場合は、合意した目標をマスターのプリセットではなくそちらから作る
@@ -80,10 +88,13 @@ var PE_Scoring = (function () {
       });
     }
 
-    /* 専門実践評価：チャレンジレベル1レベル分（R4） */
+    /* 専門実践評価：チャレンジレベル1レベル分（R4）。
+     * master.ladders は職種ごとのラダー（PE_masterFor で職種から決まる。R19）。 */
+    var held = heldLicensesOf(master);
     for (var l = 0; l < master.ladders.length; l++) {
       var ladder = master.ladders[l];
-      if (ladder.id === 'management' && !profile.managementLadder) continue;
+      /* 任意のラダー（マネジメントラダー）は本人が選択したときだけ（R20） */
+      if (!ladder.required && !profile.managementLadder) continue;
       var targetLevel = (ladder.fixedLevel === null || ladder.fixedLevel === undefined)
         ? profile.challengeLevel : ladder.fixedLevel;
 
@@ -92,7 +103,9 @@ var PE_Scoring = (function () {
         for (var g = 0; g < comp.levelGoals.length; g++) {
           var goal = comp.levelGoals[g];
           if (goal.level !== targetLevel) continue;
-          var na = !!(goal.requiresLicense && !profile.hasLicense);
+          /* 要資格（内部の区分名は「適用外」）：資格要件の資格を本人が持たない（R6）。
+           * 本人の保有資格は職種から決まる（改訂方針C）。 */
+          var na = !!(goal.requiresLicense && held.indexOf(goal.licenseName || '') === -1);
           /* 資格名は画面表記にのみ使う。判定には使わない。 */
           var licenseName = goal.requiresLicense ? (goal.licenseName || '') : '';
           (function (ladder, comp, goal, na, licenseName) {
@@ -414,7 +427,7 @@ var PE_Scoring = (function () {
     return out;
   }
 
-  /* 実践ラダーの4つの力のレーダーチャート用データ */
+  /* 実践ラダーの力のレーダーチャート用データ（軸は職種ごとの実践ラダーの力。マスターから取得） */
   function radarAxes(items, answers, otherAnswers, master) {
     var practice = null;
     for (var i = 0; i < master.ladders.length; i++) {
@@ -538,6 +551,7 @@ var PE_Scoring = (function () {
     levelDefinitionOf: levelDefinitionOf,
     licenseNamesOf: licenseNamesOf,
     licenseTerm: licenseTerm,
+    heldLicensesOf: heldLicensesOf,
     buildGroups: buildGroups,
     flatten: flatten,
     answerOf: answerOf,

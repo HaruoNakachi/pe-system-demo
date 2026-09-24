@@ -52,7 +52,7 @@ var PE_Radar = (function () {
     }
   }
 
-  /* options.ariaLabel を渡さない場合の文言は従来どおり（実践ラダーの呼び出しは変えていない）。 */
+  /* options.ariaLabel を渡さない場合は汎用の文言にする（ラダーの呼び出し側で職種名入りの文言を渡す）。 */
   function render(container, axes, options) {
     container.innerHTML = '';
     if (!axes || axes.length < 3) {
@@ -67,7 +67,7 @@ var PE_Radar = (function () {
       role: 'img',
       'aria-label': (options && options.ariaLabel)
         ? options.ariaLabel
-        : '実践ラダーの4つの力についての本人評価と他者評価のレーダーチャート',
+        : '力ごとの本人評価と他者評価のレーダーチャート',
       class: 'radar-svg'
     });
 

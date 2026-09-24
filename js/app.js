@@ -212,14 +212,14 @@
     if (!profile || typeof profile !== 'object') {
       profile = {
         name: PE_DEFAULT_PROFILE.name,
-        jobType: PE_DEFAULT_PROFILE.jobType,
-        hasLicense: PE_DEFAULT_PROFILE.hasLicense,
+        jobTypeId: PE_DEFAULT_PROFILE.jobTypeId,
         managementLadder: PE_DEFAULT_PROFILE.managementLadder,
         challengeLevel: PE_DEFAULT_PROFILE.challengeLevel
       };
       PE_Storage.setJSON(PE_KEYS.profile, profile);
     }
     if ([1, 2, 3, 4].indexOf(profile.challengeLevel) === -1) profile.challengeLevel = 2;
+    if (migrateProfile(profile)) PE_Storage.setJSON(PE_KEYS.profile, profile);
     state.profile = profile;
 
     /* マスターは読み取り専用のシードとして保存する（R1） */
@@ -228,15 +228,21 @@
     state.answers = PE_Storage.getJSON(PE_KEYS.answers, {});
     if (!state.answers || typeof state.answers !== 'object') state.answers = {};
 
-    var others = PE_Storage.getJSON(PE_KEYS.otherAnswers, null);
-    if (!others || typeof others !== 'object') {
-      others = {};
-      for (var k in PE_OTHER_ANSWERS) {
-        if (Object.prototype.hasOwnProperty.call(PE_OTHER_ANSWERS, k)) others[k] = PE_OTHER_ANSWERS[k];
+    /* 他者評価のダミー値。キーが無い・壊れているときはシードから作る。
+     * 既に保存されている場合も、シードにあって保存値に無いID（職種を足したときの新しい実践例など）だけを
+     * 補う。保存済みの値は書き換えない（改訂方針C。pe_demo_version を上げずに済ませるため）。 */
+    var storedOthers = PE_Storage.getJSON(PE_KEYS.otherAnswers, null);
+    var othersChanged = false;
+    if (!storedOthers || typeof storedOthers !== 'object') { storedOthers = {}; othersChanged = true; }
+    for (var k in PE_OTHER_ANSWERS) {
+      if (Object.prototype.hasOwnProperty.call(PE_OTHER_ANSWERS, k)
+        && !Object.prototype.hasOwnProperty.call(storedOthers, k)) {
+        storedOthers[k] = PE_OTHER_ANSWERS[k];
+        othersChanged = true;
       }
-      PE_Storage.setJSON(PE_KEYS.otherAnswers, others);
     }
-    state.otherAnswers = others;
+    if (othersChanged) PE_Storage.setJSON(PE_KEYS.otherAnswers, storedOthers);
+    state.otherAnswers = storedOthers;
 
     var sub = PE_Storage.getJSON(PE_KEYS.submitted, null);
     state.submitted = (sub && typeof sub === 'object') ? sub : { submitted: false, at: null };
@@ -278,6 +284,28 @@
     goalEditor = null;
     goalFlash = null;
     if (reinit) initData();
+  }
+
+  /* ---- プロフィールの移行（改訂方針C） ----
+   * 旧形式：{ jobType: '愛玩動物看護師'（職種名の文字列）, hasLicense: true | false, … }
+   * 新形式：{ jobTypeId: 'vet_nurse'（職種ID）, … }。保有資格は職種から決まるため hasLicense は持たない。
+   * 職種IDが無い・マスターに無いときは、旧形式の職種名で引き、それでも引けなければ既定の職種とする。
+   * 変更したときは true を返す（呼び出し側で保存する）。 */
+  function migrateProfile(profile) {
+    var changed = false;
+    if (!PE_jobTypeById(profile.jobTypeId)) {
+      var byName = null;
+      if (typeof profile.jobType === 'string') {
+        for (var i = 0; i < PE_MASTER.jobTypes.length; i++) {
+          if (PE_MASTER.jobTypes[i].name === profile.jobType) byName = PE_MASTER.jobTypes[i];
+        }
+      }
+      profile.jobTypeId = byName ? byName.id : PE_DEFAULT_JOB_TYPE_ID;
+      changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(profile, 'jobType')) { delete profile.jobType; changed = true; }
+    if (Object.prototype.hasOwnProperty.call(profile, 'hasLicense')) { delete profile.hasLicense; changed = true; }
+    return changed;
   }
 
   /* ---- 各個人の目標：保存形式の検証 ---- */
@@ -332,10 +360,50 @@
 
   /* ---------------- 導出データ ---------------- */
 
+  /* ---- 職種（改訂方針C） ----
+   * 職種名・力の名前・力の数はすべてマスター（js/jobtypes.js）から取る。
+   * このファイルに職種名を書かない（R31）。 */
+
+  /* 本人の職種。プロフィールの職種IDがマスターに無いときは既定の職種 */
+  function currentJob() {
+    return PE_jobTypeOrDefault(state.profile ? state.profile.jobTypeId : null);
+  }
+
+  /* 本人の職種のマスター（その職種の実践ラダー・マネジメントラダーを ladders に持つ） */
+  function currentMaster() {
+    return PE_masterFor(currentJob().id);
+  }
+
+  /* 「実践ラダー（トリマー）」のように、ラダー名に職種名を添える */
+  function ladderTitle(ladderName) {
+    return ladderName + '（' + currentJob().name + '）';
+  }
+
+  /* 他者評価のダミー値。保存値を優先し、保存値に無いIDは職種のマスターの値で補う（保存はしない）。
+   * 画面を開いたまま職種のマスターが増えた場合でも、他者評価が「—」にならないようにするため。 */
+  function others() {
+    var job = currentJob();
+    var oa = job.otherAnswers || {};
+    var out = null;
+    for (var k in oa) {
+      if (Object.prototype.hasOwnProperty.call(oa, k) && !Object.prototype.hasOwnProperty.call(state.otherAnswers, k)) {
+        if (!out) {
+          out = {};
+          for (var s in state.otherAnswers) {
+            if (Object.prototype.hasOwnProperty.call(state.otherAnswers, s)) out[s] = state.otherAnswers[s];
+          }
+        }
+        out[k] = oa[k];
+      }
+    }
+    return out || state.otherAnswers;
+  }
+
   function derived() {
-    var groups = PE_Scoring.buildGroups(PE_MASTER, state.profile, state.personalGoals.goals);
+    var master = currentMaster();
+    var groups = PE_Scoring.buildGroups(master, state.profile, state.personalGoals.goals);
     var items = PE_Scoring.flatten(groups);
-    return { groups: groups, items: items };
+    return { groups: groups, items: items, master: master };
   }
 
   /* 集計に渡す個人ごとの重み（3領域・目標ごと） */
@@ -437,12 +505,16 @@
         used[PE_MASTER.basicItems[b].practiceItems[bp].id] = true;
       }
     }
-    for (var l = 0; l < PE_MASTER.ladders.length; l++) {
-      var comps = PE_MASTER.ladders[l].competencies;
-      for (var c = 0; c < comps.length; c++) {
-        for (var g = 0; g < comps[c].levelGoals.length; g++) {
-          var pis = comps[c].levelGoals[g].practiceItems;
-          for (var p = 0; p < pis.length; p++) used[pis[p].id] = true;
+    /* 全職種のラダーの実践例（職種を切り替えても回答の保存キーが重ならないように） */
+    for (var j = 0; j < PE_MASTER.jobTypes.length; j++) {
+      var ladders = PE_MASTER.jobTypes[j].ladders;
+      for (var l = 0; l < ladders.length; l++) {
+        var comps = ladders[l].competencies;
+        for (var c = 0; c < comps.length; c++) {
+          for (var g = 0; g < comps[c].levelGoals.length; g++) {
+            var pis = comps[c].levelGoals[g].practiceItems;
+            for (var p = 0; p < pis.length; p++) used[pis[p].id] = true;
+          }
         }
       }
     }
@@ -898,7 +970,9 @@
       return '<span class="domain-note">レベル軸を持ちません。設定にかかわらず全員が同じ実践例に回答します。</span>';
     }
     if (domainId === 'professional') {
-      return '<span class="domain-note">チャレンジレベル1レベル分の実践例に回答します。</span>';
+      return '<span class="domain-note">職種（' + esc(currentJob().name) + '）の実践ラダー'
+        + (state.profile.managementLadder ? '・マネジメントラダー' : '')
+        + 'です。チャレンジレベル1レベル分の実践例に回答します。</span>';
     }
     var n = state.personalGoals.goals.length;
     return '<span class="domain-note">その期に合意した目標の実践例に回答します。'
@@ -911,7 +985,7 @@
       head = '<p class="group-kind">基礎評価の項目</p><h3 class="group-title">' + esc(grp.parentName) + '</h3>';
     } else if (grp.domainId === 'professional') {
       var def = PE_Scoring.levelDefinitionOf(grp.level);
-      head = '<p class="group-kind">' + esc(grp.ladderName) + '｜' + esc(grp.competencyName)
+      head = '<p class="group-kind">' + esc(ladderTitle(grp.ladderName)) + '｜' + esc(grp.competencyName)
         + '｜レベル' + esc(PE_Scoring.romanOf(grp.level)) + '</p>'
         + '<p class="level-def">レベル毎の定義：' + esc(def ? def.text : '') + '</p>'
         + '<p class="group-kind">レベル毎の目標</p>'
@@ -1034,7 +1108,7 @@
     var d = derived();
     var prog = PE_Scoring.progress(d.items, state.answers);
     var cnt = PE_Scoring.counts(d.items, state.answers);
-    var domains = PE_Scoring.domainScores(d.items, state.answers, state.otherAnswers, scoreOptions());
+    var domains = PE_Scoring.domainScores(d.items, state.answers, others(), scoreOptions());
     var selfTotal = PE_Scoring.weightedTotal(domains, 'self');
     var otherTotal = PE_Scoring.weightedTotal(domains, 'other');
     var challengeRoman = PE_Scoring.romanOf(state.profile.challengeLevel);
@@ -1078,13 +1152,14 @@
         + '判定には本人評価を用い、対象の実践例すべてに上位2段階（3・4）がついているかを見ます。'
         + esc(licenseTermOf(d.items)) + 'は判定の対象から外し、担当外・観察機会なしの実践例は未達として扱いません。</p>');
 
-    html += renderCertification(PE_Scoring.certification(d.items, state.answers, 'practice', PE_MASTER, state.profile));
+    html += renderCertification(PE_Scoring.certification(d.items, state.answers, 'practice', d.master, state.profile));
 
     if (state.profile.managementLadder) {
-      html += renderCertification(PE_Scoring.certification(d.items, state.answers, 'management', PE_MASTER, state.profile));
+      html += renderCertification(PE_Scoring.certification(d.items, state.answers, 'management', d.master, state.profile));
     } else {
+      var mgmtOff = ladderOf('management');
       html += '<div class="cert-box cert-none">'
-        + '<h3>マネジメントラダー</h3>'
+        + '<h3>' + esc(ladderTitle(mgmtOff ? mgmtOff.name : 'マネジメントラダー')) + '</h3>'
         + '<p>マネジメントラダーを選択していないため、判定は行いません。'
         + '<strong>選択していないことは減点ではありません。</strong>実践ラダーの判定にも影響しません。</p>'
         + '</div>';
@@ -1153,12 +1228,14 @@
       + '<div id="radar-basic" class="radar-wrap"></div>'
       + '</section>';
 
-    /* チャート：実践ラダー（従来どおり） */
+    /* チャート：実践ラダー。見出しに職種名を添え、力の数はマスターから取る（改訂方針C） */
+    var practiceLadder = ladderOf('practice');
     html += '<section class="card">'
-      + '<h2>実践ラダーの4つの力</h2>'
+      + '<h2>' + esc(ladderTitle(practiceLadder ? practiceLadder.name : '実践ラダー')) + 'の'
+      + (practiceLadder ? practiceLadder.competencies.length : 0) + 'つの力</h2>'
       + explainBlock('chart-practice', 'このチャートの見方について',
         '<p class="hint">チャレンジレベル（レベル' + esc(challengeRoman) + '）の実践例について、'
-        + '本人評価と他者評価を重ねて表示しています。</p>')
+        + '本人評価と他者評価を重ねて表示しています。軸は職種（' + esc(currentJob().name) + '）の実践ラダーの力です。</p>')
       + '<div id="radar" class="radar-wrap"></div>'
       + '</section>';
 
@@ -1170,7 +1247,7 @@
         (mgmt && mgmt.fixedLevel) ? mgmt.fixedLevel : state.profile.challengeLevel
       );
       html += '<section class="card">'
-        + '<h2>' + esc(mgmt ? mgmt.name : 'マネジメントラダー') + 'の'
+        + '<h2>' + esc(ladderTitle(mgmt ? mgmt.name : 'マネジメントラダー')) + 'の'
         + (mgmt ? mgmt.competencies.length : 0) + 'つの力</h2>'
         + explainBlock('chart-management', 'このチャートの見方について',
           '<p class="hint">レベル' + esc(mgmtLevel) + 'の実践例について、本人評価と他者評価を重ねて表示しています。</p>')
@@ -1180,7 +1257,7 @@
 
     /* チャート：各個人の目標（実践例が少ないため横棒グラフ／R28）。
      * 合意した目標ごとにまとめ、見出しに目標内の重みと総合スコアに占める割合を出す。 */
-    var goalList = PE_Scoring.goalScores(d.items, state.answers, state.otherAnswers, state.personalGoals.goals);
+    var goalList = PE_Scoring.goalScores(d.items, state.answers, others(), state.personalGoals.goals);
     html += '<section class="card">'
       + '<h2>各個人の目標の実践例</h2>'
       + explainBlock('chart-personal', 'この横棒グラフの見方と目盛について',
@@ -1232,7 +1309,7 @@
         : (cert.status === 'pending' ? '保留' : '対象なし'));
 
     var html = '<div class="cert-box ' + cls + '">'
-      + '<h3>' + esc(cert.ladderName) + '（レベル' + esc(cert.levelRoman) + '）</h3>'
+      + '<h3>' + esc(ladderTitle(cert.ladderName)) + '｜レベル' + esc(cert.levelRoman) + '</h3>'
       + '<p class="cert-status">' + esc(label) + '</p>'
       + '<p>' + esc(cert.message) + '</p>';
 
@@ -1270,9 +1347,11 @@
     return html;
   }
 
+  /* 本人の職種のラダー（'practice' / 'management'） */
   function ladderOf(id) {
-    for (var i = 0; i < PE_MASTER.ladders.length; i++) {
-      if (PE_MASTER.ladders[i].id === id) return PE_MASTER.ladders[i];
+    var ladders = currentJob().ladders;
+    for (var i = 0; i < ladders.length; i++) {
+      if (ladders[i].id === id) return ladders[i];
     }
     return null;
   }
@@ -1283,19 +1362,23 @@
     var wrap = document.getElementById('radar');
     if (!wrap) return;
     var d = derived();
-    var axes = PE_Scoring.radarAxes(d.items, state.answers, state.otherAnswers, PE_MASTER);
-    PE_Radar.render(wrap, axes);
+    var oa = others();
+    var practiceLadder = ladderOf('practice');
+    var axes = PE_Scoring.radarAxes(d.items, state.answers, oa, d.master);
+    PE_Radar.render(wrap, axes,
+      { ariaLabel: ladderTitle(practiceLadder ? practiceLadder.name : '実践ラダー') + 'の力ごとの本人評価と他者評価のレーダーチャート' });
 
     var basic = document.getElementById('radar-basic');
     if (basic) {
-      PE_Radar.render(basic, PE_Scoring.basicAxes(d.items, state.answers, state.otherAnswers, PE_MASTER),
+      PE_Radar.render(basic, PE_Scoring.basicAxes(d.items, state.answers, oa, d.master),
         { ariaLabel: '基礎評価の項目ごとの本人評価と他者評価のレーダーチャート' });
     }
 
     var mgmt = document.getElementById('radar-management');
     if (mgmt) {
-      PE_Radar.render(mgmt, PE_Scoring.ladderAxes(d.items, state.answers, state.otherAnswers, PE_MASTER, 'management'),
-        { ariaLabel: 'マネジメントラダーの力ごとの本人評価と他者評価のレーダーチャート' });
+      var mgmtLadder = ladderOf('management');
+      PE_Radar.render(mgmt, PE_Scoring.ladderAxes(d.items, state.answers, oa, d.master, 'management'),
+        { ariaLabel: ladderTitle(mgmtLadder ? mgmtLadder.name : 'マネジメントラダー') + 'の力ごとの本人評価と他者評価のレーダーチャート' });
     }
 
     /* 各個人の目標：合意した目標ごとに1枚。凡例は最後の1枚にだけ付ける */
@@ -1303,7 +1386,7 @@
     for (var g = 0; g < goals.length; g++) {
       var box = document.getElementById('bars-personal-' + g);
       if (!box) continue;
-      PE_Radar.renderBars(box, PE_Scoring.personalBars(d.items, state.answers, state.otherAnswers, goals[g].id),
+      PE_Radar.renderBars(box, PE_Scoring.personalBars(d.items, state.answers, oa, goals[g].id),
         {
           ariaLabel: '合意した目標「' + goals[g].text + '」の実践例ごとの本人評価と他者評価の横棒グラフ',
           legend: g === goals.length - 1
@@ -1342,8 +1425,8 @@
       + '<p class="notice notice-warn">表示している氏名・職種・評価はすべて<strong>架空のデモ用データ</strong>です。</p>'
       + '<dl class="kv">'
       + '<dt>氏名</dt><dd>' + esc(state.profile.name) + '（架空）</dd>'
-      + '<dt>職種</dt><dd>' + esc(state.profile.jobType) + '</dd>'
-      + '<dt>愛玩動物看護師の資格</dt><dd>' + (state.profile.hasLicense ? 'あり' : 'なし') + '</dd>'
+      + '<dt>職種</dt><dd>' + esc(currentJob().name)
+      + '<span class="dd-note">職種によって実践ラダーとマネジメントラダーが決まります。レベル毎の定義と基礎評価は全職種共通です。</span></dd>'
       + '<dt>マネジメントラダー</dt><dd>' + (state.profile.managementLadder ? '選択する' : '選択しない')
       + '<span class="dd-note">マネジメントラダーは任意です。選択しないこと、途中でやめることを減点として扱いません（R20）。</span></dd>'
       + '<dt>現在のレベル</dt><dd>' + (currentLevel >= 1 ? 'レベル' + esc(PE_Scoring.romanOf(currentLevel)) : '未認定') + '</dd>'
@@ -1358,7 +1441,7 @@
     if (currentLevel >= 1) {
       html += '<div class="table-wrap"><table class="table">'
         + '<thead><tr><th>評価期間</th><th>ラダー</th><th>レベル</th><th>結果</th></tr></thead><tbody>'
-        + '<tr><td>前期（架空）</td><td>実践ラダー</td><td>レベル' + esc(PE_Scoring.romanOf(currentLevel)) + '</td><td>認定</td></tr>'
+        + '<tr><td>前期（架空）</td><td>' + esc(ladderTitle(ladderOf('practice') ? ladderOf('practice').name : '実践ラダー')) + '</td><td>レベル' + esc(PE_Scoring.romanOf(currentLevel)) + '</td><td>認定</td></tr>'
         + '</tbody></table></div>';
     } else {
       html += '<p class="empty">認定の履歴はありません。レベルⅠに挑戦中です。</p>';
@@ -1369,7 +1452,8 @@
 
     html += '<section class="card">'
       + '<h2>レベル毎の定義</h2>'
-      + '<p class="hint">レベル毎の定義は専門実践評価にのみ適用され、実践ラダーとマネジメントラダーで共通です。</p>'
+      + '<p class="hint">レベル毎の定義は専門実践評価にのみ適用され、実践ラダーとマネジメントラダーで共通です。'
+      + '職種によっても変わりません。</p>'
       + '<div class="table-wrap"><table class="table">'
       + '<thead><tr><th>レベル</th><th>定義文</th><th>判別の目安</th></tr></thead><tbody>';
     for (var i = 0; i < PE_LEVEL_DEFINITIONS.length; i++) {
@@ -1442,11 +1526,15 @@
     var html = '<section class="card">'
       + '<h1>設定</h1>'
       + '<p class="notice notice-info">この設定画面は<strong>デモ専用</strong>です。'
-      + '本番ではマネジメントラダーの選択とチャレンジレベルは面談で決めます。'
+      + '本番では職種はアカウントに登録されたものを使い、マネジメントラダーの選択とチャレンジレベルは面談で決めます。'
       + '設定を変えると、回答対象とダッシュボードの表示がその場で切り替わります。</p>'
       + '<p class="progress-text">現在の回答対象：' + prog.total + '項目（' + esc(licenseTermOf(d.items)) + 'を除く）</p>'
       + '</section>';
 
+    html += viewJobTypeSection();
+
+    var mgmtLadder = ladderOf('management');
+    var mgmtComps = mgmtLadder ? mgmtLadder.competencies : [];
     html += '<section class="card">'
       + '<h2>マネジメントラダー</h2>'
       + '<div class="seg">'
@@ -1454,18 +1542,8 @@
       + segButton('management', 'false', '選択しない', state.profile.managementLadder === false)
       + '</div>'
       + '<p class="hint">マネジメントラダーは任意です。選択しないことを減点として扱いません（R20）。'
-      + '選択すると人材育成・チーム運営・改善の3つの力の実践例が加わります。</p>'
-      + '</section>';
-
-    html += '<section class="card">'
-      + '<h2>愛玩動物看護師の資格</h2>'
-      + '<div class="seg">'
-      + segButton('license', 'true', 'あり', state.profile.hasLicense === true)
-      + segButton('license', 'false', 'なし', state.profile.hasLicense === false)
-      + '</div>'
-      + '<p class="hint">資格を「なし」にすると、資格要件を持つレベル毎の目標（ケアする力）に紐づく実践例が'
-      + '<strong>' + esc(licenseTermOf(d.items)) + '</strong>になります。回答はできず、'
-      + '評価の対象から外れます（R6）。</p>'
+      + '選択すると' + esc(competencyNames(mgmtComps, '・')) + 'の' + mgmtComps.length + 'つの力の実践例が加わります'
+      + '（職種：' + esc(currentJob().name) + '）。</p>'
       + '</section>';
 
     html += '<section class="card">'
@@ -1478,7 +1556,8 @@
     html += '</div>'
       + '<p class="hint">チャレンジレベルは<strong>実践ラダー</strong>の回答対象に適用されます。'
       + 'マネジメントラダーのレベルは実践ラダーのレベルに影響しない（R20）ため、本デモではレベルⅠ固定です。</p>'
-      + '<p class="hint">基礎評価はレベル軸を持たないため、チャレンジレベルを変えても5項目のまま変わりません（R26）。</p>'
+      + '<p class="hint">基礎評価はレベル軸を持たないため、チャレンジレベルを変えても'
+      + PE_MASTER.basicItems.length + '項目のまま変わりません（R26）。</p>'
       + '</section>';
 
     html += viewPersonalGoalSettings(d);
@@ -1493,6 +1572,36 @@
     /* デモの見た目（比較用）：配色が決まったらこの節ごと削除する */
     html += viewThemeSection();
 
+    return html;
+  }
+
+  /* 力の名前を区切り文字でつなぐ */
+  function competencyNames(comps, sep) {
+    var names = [];
+    for (var i = 0; i < comps.length; i++) names.push(comps[i].name);
+    return names.join(sep);
+  }
+
+  /* 設定画面：職種（改訂方針C）。選択肢は職種のマスターから動的に作る（R31）。
+   * 本番では職種はアカウントに登録されたものを使う。デモでは挙動を確認するため、ここで切り替えられる。 */
+  function viewJobTypeSection() {
+    var job = currentJob();
+    var practice = ladderOf('practice');
+    var practiceComps = practice ? practice.competencies : [];
+    var html = '<section class="card">'
+      + '<h2>職種</h2>'
+      + '<div class="seg seg-job">';
+    for (var i = 0; i < PE_MASTER.jobTypes.length; i++) {
+      var jt = PE_MASTER.jobTypes[i];
+      html += segButton('jobtype', jt.id, jt.name, jt.id === job.id);
+    }
+    html += '</div>'
+      + '<p class="hint">職種を切り替えると、実践ラダーとマネジメントラダーが入れ替わります。'
+      + 'レベル毎の定義と基礎評価は全職種共通です。本番では職種はアカウントに登録されたものを使います。</p>'
+      + '<p class="hint">現在の実践ラダーの力：<strong>' + esc(competencyNames(practiceComps, '／')) + '</strong></p>'
+      + '<p class="hint">各個人の目標と重みは本人に属するため、職種を切り替えても変わりません。'
+      + '職種ごとの回答はそれぞれ保存され、切り替えて戻すと元の回答が残っています。</p>'
+      + '</section>';
     return html;
   }
 
@@ -1702,9 +1811,15 @@
       state.profile.managementLadder = (btn.getAttribute('data-value') === 'true');
       saveProfile(); render(); return;
     }
-    if (action === 'set-license') {
-      state.profile.hasLicense = (btn.getAttribute('data-value') === 'true');
-      saveProfile(); render(); return;
+    if (action === 'set-jobtype') {
+      /* 職種を切り替える（改訂方針C）。マスターにある職種IDだけを受け付ける。
+       * 提出状態・回答・各個人の目標・重みは変えない（既存の設定変更と同じ扱い）。 */
+      var jobId = btn.getAttribute('data-value');
+      if (PE_jobTypeById(jobId)) {
+        state.profile.jobTypeId = jobId;
+        saveProfile(); render();
+      }
+      return;
     }
     if (action === 'set-level') {
       state.profile.challengeLevel = parseInt(btn.getAttribute('data-value'), 10);
