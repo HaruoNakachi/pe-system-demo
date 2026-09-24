@@ -459,6 +459,7 @@ code {
 
 input[type="text"],
 input[type="password"],
+input[type="number"],
 textarea {
   width: 100%;
   min-height: 44px;
@@ -784,6 +785,143 @@ summary:focus-visible {
 }
 .seg-level .seg-btn { flex: 1 1 70px; }
 
+/* ---------- 各個人の目標（改訂方針D） ----------
+ * 設定画面の「各個人の目標（デモ用の編集）」、評価入力・ダッシュボード・マイページの目標表示。
+ * 入力欄・ボタンのタップ領域は 44px 以上（input / textarea / .btn の min-height: 44px）。
+ */
+
+.sub-heading {
+  margin: 20px 0 6px;
+  font-size: 0.98rem;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.card > .sub-heading:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+
+.limit-list {
+  margin: 0 0 6px;
+  padding-left: 1.2em;
+  font-size: 0.9rem;
+}
+.limit-list li { margin-bottom: 2px; }
+
+.goal-flash { scroll-margin-top: 130px; }
+
+.weight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.weight-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.weight-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.weight-input input { width: 6.2em; text-align: right; }
+.weight-sum { margin: 8px 0 0; font-size: 0.9rem; font-weight: 700; }
+.weight-sum.is-bad { color: var(--danger); }
+
+.goal-list, .goal-ref-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.goal-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--tint);
+  padding: 12px 14px;
+  margin: 0 0 10px;
+}
+.goal-panel-editing { background: var(--accent-soft); border-color: var(--accent-line); }
+.goal-panel-new { margin-top: 12px; }
+.goal-text {
+  margin: 2px 0 6px;
+  font-weight: 700;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.goal-weight-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+}
+.goal-weight-row label { font-size: 0.85rem; font-weight: 700; }
+.goal-share { font-size: 0.85rem; color: var(--muted); }
+.goal-weight-note {
+  margin: 0 0 8px;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+.goal-items-title { margin: 8px 0 2px; font-size: 0.83rem; font-weight: 700; color: var(--muted); }
+.goal-items {
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.goal-items li { margin-bottom: 2px; }
+.goal-add-row { margin-top: 14px; }
+
+.btn-danger-outline {
+  color: var(--danger);
+  background: var(--card);
+  border-color: var(--danger);
+}
+.btn-danger-outline:hover { background: var(--danger-bg); }
+
+.ge-items {
+  border: 0;
+  margin: 8px 0 0;
+  padding: 0;
+  min-width: 0;
+}
+.ge-items legend {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+  padding: 0;
+}
+.ge-item { margin: 0 0 8px; }
+.ge-item-label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 2px; }
+.ge-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ge-item-row textarea { flex: 1 1 auto; min-width: 0; }
+.ge-item-row .btn { flex: 0 0 auto; padding: 10px 12px; }
+
+.goal-chart {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+.goal-chart-title {
+  margin: 2px 0 4px;
+  font-size: 0.98rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.goal-chart-meta { margin: 0; font-size: 0.85rem; color: var(--muted); }
+
+.weight-list {
+  margin: 6px 0 0;
+  padding-left: 1.2em;
+  font-size: 0.85rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- デモの見た目（比較用）：配色が決まったらこの節ごと削除する ---------- */
 
 .theme-list {
@@ -865,4 +1003,9 @@ summary:focus-visible {
   .theme-option { min-height: 52px; }
   .level-box, .total-box { flex: 1 1 100%; }
   .table { font-size: 0.85rem; }
+  .weight-grid { grid-template-columns: 1fr; gap: 8px; }
+  .weight-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .weight-field label { margin-bottom: 0; }
+  .goal-panel { padding: 12px; }
+  #personal-goal-settings .btn-row .btn { flex: 1 1 auto; }
 }

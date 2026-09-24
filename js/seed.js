@@ -4,6 +4,7 @@
  *
  * source: "spec"       … デモアプリ仕様.md／用語集.md に記載のある文言
  * source: "supplement" … デモの挙動確認のために補完した架空データ
+ * source: "user"       … デモの設定画面で入力された合意した目標・実践例（シードには存在しない）
  */
 
 var PE_SEED_VERSION = '1';
@@ -337,5 +338,58 @@ var PE_KEYS = {
   master: 'pe_demo_master',
   answers: 'pe_demo_answers',
   otherAnswers: 'pe_demo_other_answers',
-  submitted: 'pe_demo_submitted'
+  submitted: 'pe_demo_submitted',
+  /* 改訂方針D で追加した評価データ。データリセットとシード版の不一致による初期化の両方で消す。 */
+  personalGoals: 'pe_demo_personal_goals',   /* 合意した目標・実践例・目標ごとの重み（personal_goal に対応） */
+  personalWeight: 'pe_demo_personal_weight'  /* 個人ごとの3領域の重み（personal_weight に対応） */
 };
+
+/* ---- 各個人の目標（改訂方針D） ----
+ * 合意した目標は個数の上限を持たず、目標ごとに重みを持つ（R28）。
+ * 目標ごとの重みは「目標どうしの比率（％）」で持ち、合計は100。
+ * 総合スコアに占める割合 ＝ 目標ごとの重み × 各個人の目標の重み ÷ 100（R28・R30）。
+ * 3領域の重みは病院の既定値（PE_DOMAINS）に個人ごとの調整を重ねる（R30）。 */
+
+/* サンプルの目標（経営・人事に関わる目標の例。架空の補完データ）。
+ * 設定画面の「サンプルの目標を追加」で、実践例とともに新しいIDを振って追加する。 */
+var PE_SAMPLE_PERSONAL_GOAL = {
+  source: 'supplement',
+  text: '来期の採用計画を院長と作成し、新人の受け入れ体制を整える',
+  practiceItems: [
+    { source: 'supplement', text: '採用に必要な人数と時期を整理し、院長に提案した' },
+    { source: 'supplement', text: '新人の受け入れ手順書を作成し、スタッフに共有した' }
+  ]
+};
+
+/* 病院の既定値（50／40／10）の複製を返す */
+function PE_defaultPersonalWeight() {
+  var w = {};
+  for (var i = 0; i < PE_DOMAINS.length; i++) w[PE_DOMAINS[i].id] = PE_DOMAINS[i].weight;
+  return w;
+}
+
+/* 目標の数に応じた均等割り（整数・合計100。端数は先頭の目標から1ずつ配る） */
+function PE_equalGoalWeights(count) {
+  var out = [];
+  if (count <= 0) return out;
+  var base = Math.floor(100 / count);
+  var rest = 100 - base * count;
+  for (var i = 0; i < count; i++) out.push(base + (i < rest ? 1 : 0));
+  return out;
+}
+
+/* 初期状態の合意した目標（シードのプリセット目標の複製。IDは変えない） */
+function PE_initialPersonalGoals() {
+  var goals = [];
+  var src = PE_MASTER.personalGoals;
+  var weights = PE_equalGoalWeights(src.length);
+  for (var i = 0; i < src.length; i++) {
+    var items = [];
+    for (var j = 0; j < src[i].practiceItems.length; j++) {
+      var pi = src[i].practiceItems[j];
+      items.push({ id: pi.id, text: pi.text, source: pi.source });
+    }
+    goals.push({ id: src[i].id, text: src[i].text, source: src[i].source, weight: weights[i], practiceItems: items });
+  }
+  return { goals: goals, seq: 0 };
+}

@@ -6,6 +6,11 @@
  *  - 担当外・観察機会なしは低評価と区別し、分母から外す。
  *  - 有効な回答が0件の評価領域は平均を「—」とし、重み付き総合スコアからも外して
  *    残りの重みを再正規化する。
+ *  - 各個人の目標の領域スコアは、合意した目標ごとのスコア（その目標の実践例の平均）を
+ *    目標ごとの重みで加重平均したもの（改訂方針D・R28）。有効な回答が0件の目標は外し、
+ *    残りの目標で重みを再正規化する。他者評価も同じ計算方法で算出する。
+ *  - 3領域の重みは個人ごとの値（pe_demo_personal_weight）を使う（R30）。
+ *  - レベル認定の判定は専門実践評価のみが対象であり、目標・重みの影響を受けない（R21・R27）。
  */
 
 var PE_Scoring = (function () {
@@ -42,8 +47,10 @@ var PE_Scoring = (function () {
   }
 
   /* 回答対象の実践例を、親（基礎評価の項目／レベル毎の目標／合意した目標）ごとの
-   * グループとして組み立てる（R2）。 */
-  function buildGroups(master, profile) {
+   * グループとして組み立てる（R2）。
+   * personalGoals を渡した場合は、合意した目標をマスターのプリセットではなくそちらから作る
+   * （設定画面で編集した合意した目標。改訂方針D）。 */
+  function buildGroups(master, profile, personalGoals) {
     var groups = [];
 
     /* 基礎評価：設定によらず常に全項目（R26） */
@@ -117,31 +124,37 @@ var PE_Scoring = (function () {
       }
     }
 
-    /* 各個人の目標（R28） */
-    for (var p = 0; p < master.personalGoals.length; p++) {
-      var pg = master.personalGoals[p];
-      groups.push({
-        key: 'personal:' + pg.id,
-        domainId: 'personal',
-        domainName: '各個人の目標',
-        parentKind: '合意した目標',
-        parentName: '合意した目標',
-        parentText: pg.text,
-        ladderId: null,
-        ladderName: null,
-        competencyId: null,
-        competencyName: null,
-        level: null,
-        requiresLicense: false,
-        notApplicable: false,
-        items: pg.practiceItems.map(function (pi) {
-          return {
-            id: pi.id, text: pi.text, source: pi.source,
-            domainId: 'personal', ladderId: null, competencyId: null,
-            level: null, notApplicable: false
-          };
-        })
-      });
+    /* 各個人の目標（R28）。合意した目標は複数持てる。目標ごとに親としてまとめる（R2）。 */
+    var goals = personalGoals || master.personalGoals;
+    for (var p = 0; p < goals.length; p++) {
+      (function (pg, index, count) {
+        groups.push({
+          key: 'personal:' + pg.id,
+          domainId: 'personal',
+          domainName: '各個人の目標',
+          parentKind: '合意した目標',
+          parentName: '合意した目標',
+          parentText: pg.text,
+          goalId: pg.id,
+          goalWeight: (typeof pg.weight === 'number') ? pg.weight : null,
+          goalIndex: index,
+          goalCount: count,
+          ladderId: null,
+          ladderName: null,
+          competencyId: null,
+          competencyName: null,
+          level: null,
+          requiresLicense: false,
+          notApplicable: false,
+          items: pg.practiceItems.map(function (pi) {
+            return {
+              id: pi.id, text: pi.text, source: pi.source,
+              domainId: 'personal', goalId: pg.id, ladderId: null, competencyId: null,
+              level: null, notApplicable: false
+            };
+          })
+        });
+      })(goals[p], p, goals.length);
     }
 
     return groups;
@@ -181,12 +194,86 @@ var PE_Scoring = (function () {
     return { answered: answered, total: total };
   }
 
-  /* 領域別スコア。本人評価・他者評価の両方を算出する。 */
-  function domainScores(items, answers, otherAnswers) {
+  /* 合意した目標ごとのスコアを、目標ごとの重みで加重平均する（改訂方針D・R28）。
+   * goals: [{ id, weight }]（weight は目標どうしの比率％。合計100）
+   * goalAcc: { 目標ID: { selfSum, selfCount, otherSum, otherCount } }
+   *
+   *   目標のスコア g_i        ＝ その目標の有効な実践例の評価基準の合計 ÷ 件数
+   *   各個人の目標の領域スコア ＝ Σ g_i × (w_i ÷ W)   … W は有効な回答がある目標の重みの合計
+   *
+   * 有効な回答が0件の目標は加重平均から外し、残りの目標で重みを再正規化する。
+   * 重みを先に w_i ÷ W の比にしてから掛けるのは、目標が1つのとき比が厳密に 1 になり、
+   * 従来の単純平均と浮動小数点の値まで一致させるためである。 */
+  function weightedGoalAverage(goals, goalAcc, sumKey, countKey) {
+    var used = [], weightSum = 0;
+    for (var i = 0; i < goals.length; i++) {
+      var g = goalAcc[goals[i].id];
+      if (!g || g[countKey] === 0) continue;
+      var w = (typeof goals[i].weight === 'number' && goals[i].weight > 0) ? goals[i].weight : 0;
+      used.push({ avg: g[sumKey] / g[countKey], weight: w });
+      weightSum += w;
+    }
+    if (used.length === 0 || weightSum <= 0) return null;
+    var value = 0;
+    for (var j = 0; j < used.length; j++) value += used[j].avg * (used[j].weight / weightSum);
+    return value;
+  }
+
+  /* 目標ごとのスコア（ダッシュボードの目標ごとの表示用）。
+   * 集計の約束は領域別スコアと同じ（要資格・担当外・観察機会なし・未回答は分母から外す。
+   * 他者評価は本人評価に評価基準の値がある実践例のうち、他者評価の値があるものだけを数える）。 */
+  function goalScores(items, answers, otherAnswers, goals) {
+    var acc = accumulateGoals(items, answers, otherAnswers);
+    var out = [];
+    for (var i = 0; i < goals.length; i++) {
+      var g = acc[goals[i].id] || { selfSum: 0, selfCount: 0, otherSum: 0, otherCount: 0, targetCount: 0 };
+      out.push({
+        id: goals[i].id,
+        text: goals[i].text,
+        weight: goals[i].weight,
+        selfCount: g.selfCount,
+        otherCount: g.otherCount,
+        targetCount: g.targetCount,
+        selfAverage: g.selfCount > 0 ? g.selfSum / g.selfCount : null,
+        otherAverage: g.otherCount > 0 ? g.otherSum / g.otherCount : null
+      });
+    }
+    return out;
+  }
+
+  function accumulateGoals(items, answers, otherAnswers) {
+    var acc = {};
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.domainId !== 'personal' || !it.goalId) continue;
+      var g = acc[it.goalId];
+      if (!g) g = acc[it.goalId] = { selfSum: 0, selfCount: 0, otherSum: 0, otherCount: 0, targetCount: 0 };
+      if (it.notApplicable) continue;
+      g.targetCount++;
+      var ans = answerOf(answers, it.id);
+      if (ans.na || ans.score === null) continue;
+      g.selfSum += ans.score; g.selfCount++;
+      var other = otherAnswers[it.id];
+      if (typeof other === 'number') { g.otherSum += other; g.otherCount++; }
+    }
+    return acc;
+  }
+
+  /* 領域別スコア。本人評価・他者評価の両方を算出する。
+   * options（任意）:
+   *   weights: { basic, professional, personal }  個人ごとの3領域の重み（R30）。省略時は PE_DOMAINS の既定値
+   *   goals:   [{ id, weight }]                   合意した目標と目標ごとの重み（R28）。
+   *            渡した場合、各個人の目標の平均は目標ごとの加重平均になる。 */
+  function domainScores(items, answers, otherAnswers, options) {
+    var weights = (options && options.weights) || null;
+    var goals = (options && options.goals) || null;
     var acc = {};
     for (var d = 0; d < PE_DOMAINS.length; d++) {
-      acc[PE_DOMAINS[d].id] = {
-        id: PE_DOMAINS[d].id, name: PE_DOMAINS[d].name, weight: PE_DOMAINS[d].weight,
+      var id = PE_DOMAINS[d].id;
+      acc[id] = {
+        id: id, name: PE_DOMAINS[d].name,
+        weight: (weights && typeof weights[id] === 'number') ? weights[id] : PE_DOMAINS[d].weight,
+        defaultWeight: PE_DOMAINS[d].weight,
         selfSum: 0, selfCount: 0, otherSum: 0, otherCount: 0,
         notApplicableCount: 0, unobservedCount: 0, unansweredCount: 0, targetCount: 0
       };
@@ -213,18 +300,29 @@ var PE_Scoring = (function () {
       var x = acc[PE_DOMAINS[k].id];
       x.selfAverage = x.selfCount > 0 ? (x.selfSum / x.selfCount) : null;
       x.otherAverage = x.otherCount > 0 ? (x.otherSum / x.otherCount) : null;
+      if (x.id === 'personal' && goals) {
+        var goalAcc = accumulateGoals(items, answers, otherAnswers);
+        x.selfAverage = weightedGoalAverage(goals, goalAcc, 'selfSum', 'selfCount');
+        x.otherAverage = weightedGoalAverage(goals, goalAcc, 'otherSum', 'otherCount');
+        x.goalWeighted = true;
+      }
       list.push(x);
     }
     return list;
   }
 
-  /* 重み付き総合スコア。有効回答0件の領域は重みごと除き、残りを再正規化する。 */
+  /* 重み付き総合スコア。有効回答0件の領域は重みごと除き、残りを再正規化する。
+   * 3領域の重みは個人ごとに調整できる（R30）ため、重みが0の領域がありうる。
+   * 再正規化の注記は「重みを持つ領域を除いたとき」だけ出す（重み0の領域は除いても配分が変わらない）。 */
   function weightedTotal(domainList, which) {
     var key = which === 'other' ? 'otherAverage' : 'selfAverage';
-    var sum = 0, weightSum = 0, excluded = [];
+    var sum = 0, weightSum = 0, excluded = [], excludedWeight = 0;
     for (var i = 0; i < domainList.length; i++) {
       var d = domainList[i];
-      if (d[key] === null) { excluded.push(d.name); continue; }
+      if (d[key] === null) {
+        if (d.weight > 0) { excluded.push(d.name); excludedWeight += d.weight; }
+        continue;
+      }
       sum += d[key] * d.weight;
       weightSum += d.weight;
     }
@@ -232,7 +330,7 @@ var PE_Scoring = (function () {
       value: weightSum > 0 ? (sum / weightSum) : null,
       usedWeight: weightSum,
       excluded: excluded,
-      renormalized: weightSum > 0 && weightSum < 100
+      renormalized: weightSum > 0 && excludedWeight > 0
     };
   }
 
@@ -413,11 +511,13 @@ var PE_Scoring = (function () {
     return axes;
   }
 
-  /* 各個人の目標の横棒グラフ用。実践例1つにつき1本組。 */
-  function personalBars(items, answers, otherAnswers) {
+  /* 各個人の目標の横棒グラフ用。実践例1つにつき1本組。
+   * goalId を渡すと、その合意した目標の実践例だけを返す（目標ごとにまとめて表示するため）。 */
+  function personalBars(items, answers, otherAnswers, goalId) {
     var out = [];
     for (var i = 0; i < items.length; i++) {
       if (items[i].domainId !== 'personal') continue;
+      if (goalId && items[i].goalId !== goalId) continue;
       var v = aggregateItems([items[i]], answers, otherAnswers);
       out.push({ label: items[i].text, state: v.state, self: v.self, other: v.other });
     }
@@ -443,6 +543,7 @@ var PE_Scoring = (function () {
     answerOf: answerOf,
     progress: progress,
     domainScores: domainScores,
+    goalScores: goalScores,
     weightedTotal: weightedTotal,
     certification: certification,
     gaps: gaps,

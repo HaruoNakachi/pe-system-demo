@@ -246,7 +246,15 @@ var PE_Radar = (function () {
       var top = blk.y + blk.labelH + 6;
       if (typeof bar.self === 'number' || typeof bar.other === 'number') {
         g.appendChild(barRow(bar.self, top, trackX, trackW, barH, max, 'bar-self'));
-        g.appendChild(barRow(bar.other, top + barH + barGap, trackX, trackW, barH, max, 'bar-other'));
+        if (typeof bar.other === 'number') {
+          g.appendChild(barRow(bar.other, top + barH + barGap, trackX, trackW, barH, max, 'bar-other'));
+        } else {
+          /* 他者評価の値がない実践例（デモの設定画面で追加した合意した目標など）。
+             0 のように見せず「—」と文字で示す。 */
+          var dash = el('text', { x: trackX, y: (top + barH + barGap + barH - 3).toFixed(1), class: 'bar-note' });
+          dash.textContent = '他者評価 —';
+          g.appendChild(dash);
+        }
       } else {
         var note = el('text', { x: trackX, y: top + 11, class: 'bar-note' });
         note.textContent = stateNote(bar.state);
@@ -256,7 +264,8 @@ var PE_Radar = (function () {
     }
 
     container.appendChild(svg);
-    appendLegend(container);
+    /* options.legend === false のときは凡例を付けない（合意した目標ごとに複数枚並べるとき、最後の1枚にだけ付ける） */
+    if (!options || options.legend !== false) appendLegend(container);
   }
 
   function barRow(value, y, x, width, height, max, className) {
