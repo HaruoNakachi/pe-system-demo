@@ -128,8 +128,10 @@ var PE_MASTER = {
         description: '物品・設備・人員などの資源にはコストがあることを理解し、適切かつ効率的に活用する' },
       { id: 'ci_time', category: 'business', mark: '②', name: '時間・生産性',
         description: '限られた時間の中で優先順位を考え、業務の質を保ちながら効率を高める' },
+      /* 受領資料の文は「動物看護師の業務やサービスが…」。設計方針 2-3 の「職種に応じて読み替える」に従い、
+       * {jobTypeName} の位置に本人の職種名（職種マスターの name）を差し込んで表示する（PE_contributionDescription。R31） */
       { id: 'ci_value', category: 'business', mark: '③', name: 'サービス価値・経営への理解',
-        description: '動物看護師の業務やサービスが、飼い主への価値提供や病院の持続的な運営につながることを理解し、行動する' },
+        description: '{jobTypeName}の業務やサービスが、飼い主への価値提供や病院の持続的な運営につながることを理解し、行動する' },
       { id: 'ci_team', category: 'organization', mark: '④', name: 'チームへの貢献',
         description: '自分の役割だけでなく、周囲の状況やチーム目標を意識し、組織全体が円滑に働けるよう行動する' },
       { id: 'ci_ikusei', category: 'organization', mark: '⑤', name: '人材育成',
@@ -321,7 +323,7 @@ var PE_KEYS = {
   submitted: 'pe_demo_submitted',
   /* 評価データ。データリセットとシード版の不一致による初期化の両方で消す。 */
   personalGoals: 'pe_demo_personal_goals',   /* 合意した目標・実践例・目標ごとの重み（personal_goal に対応） */
-  personalWeight: 'pe_demo_personal_weight', /* 個人ごとの4領域の重み（personal_weight に対応） */
+  personalWeight: 'pe_demo_personal_weight', /* 個人ごとの重み。C を使うとき・使わないときを別々に持つ（personal_weight に対応） */
   hospital: 'pe_demo_hospital'               /* 病院の設定：C を使うか・C の実践例（hospital_domain_selection／practice_item に対応。ABC 改訂で追加） */
 };
 
@@ -349,30 +351,54 @@ function PE_defaultPersonalWeight() {
   return w;
 }
 
-/* 集計に使う領域の重み（R30・R32）。
- * C を使うときは保存値（4領域・合計100）そのまま。
- * C を使わないときは C を除き、残りの3領域の比率を保ったまま合計100になるよう再正規化する
- * （既定値なら A 40÷85×100≒47.1／B 35÷85×100≒41.2／各個人の目標 10÷85×100≒11.8）。
+/* ---- 個人ごとの重み（R30・R32） ----
+ * C を使うときと使わないときで、重みを別々に持つ（pe_demo_personal_weight）。
+ *   { withC:    null | { basic, professional, contribution, personal, updatedAt? }   … 4つの整数・合計100
+ *     withoutC: null | { basic, professional, personal, updatedAt? } }               … 3つの整数・合計100
+ * null は「個人で調整していない」＝病院の既定値を使う。
+ *   C を使うとき   ：既定値 40／35／15／10 そのまま。
+ *   C を使わないとき：既定値から C を除き、残りの比率を保ったまま合計100に再正規化した値
+ *                     （A 40÷85×100≒47.1／B 35÷85×100≒41.2／各個人の目標 10÷85×100≒11.8）。
+ *                     集計には正確な比（小数）を使い、画面では小数1桁で表示する。
+ * C の使う／使わないを切り替えても、もう一方の重みは消えない。 */
+
+/* 重みを持つ評価領域（C を使わないときは C を除く） */
+function PE_weightDomains(useContribution) {
+  var out = [];
+  for (var i = 0; i < PE_DOMAINS.length; i++) {
+    if (PE_DOMAINS[i].optional && !useContribution) continue;
+    out.push(PE_DOMAINS[i]);
+  }
+  return out;
+}
+
+/* pe_demo_personal_weight の中の、C を使う／使わないそれぞれの重みのキー */
+function PE_weightKey(useContribution) {
+  return useContribution ? 'withC' : 'withoutC';
+}
+
+/* 個人ごとの重みの初期値（どちらも調整していない） */
+function PE_initialPersonalWeight() {
+  return { withC: null, withoutC: null };
+}
+
+/* 病院の既定値を、C を使う／使わないに応じて返す（使わないときは再正規化した正確な比） */
+function PE_defaultWeightsFor(useContribution) {
+  var list = PE_weightDomains(useContribution), out = {}, sum = 0, i;
+  for (i = 0; i < list.length; i++) sum += list[i].weight;
+  for (i = 0; i < list.length; i++) {
+    out[list[i].id] = useContribution ? list[i].weight : (sum > 0 ? list[i].weight * 100 / sum : 0);
+  }
+  return out;
+}
+
+/* 集計に使う領域の重み。個人で調整していればその値、していなければ病院の既定値（上記）。
  * 戻り値の contribution は、C を使わないときは持たない。 */
 function PE_effectiveWeights(stored, useContribution) {
-  var out = {}, i, id;
-  if (useContribution) {
-    for (i = 0; i < PE_DOMAINS.length; i++) {
-      id = PE_DOMAINS[i].id;
-      out[id] = (stored && typeof stored[id] === 'number') ? stored[id] : PE_DOMAINS[i].weight;
-    }
-    return out;
-  }
-  var sum = 0;
-  for (i = 0; i < PE_DOMAINS.length; i++) {
-    if (PE_DOMAINS[i].optional) continue;
-    id = PE_DOMAINS[i].id;
-    out[id] = (stored && typeof stored[id] === 'number') ? stored[id] : PE_DOMAINS[i].weight;
-    sum += out[id];
-  }
-  for (id in out) {
-    if (Object.prototype.hasOwnProperty.call(out, id)) out[id] = sum > 0 ? out[id] * 100 / sum : 0;
-  }
+  var part = stored ? stored[PE_weightKey(useContribution)] : null;
+  if (!part || typeof part !== 'object') return PE_defaultWeightsFor(useContribution);
+  var list = PE_weightDomains(useContribution), out = {};
+  for (var i = 0; i < list.length; i++) out[list[i].id] = part[list[i].id];
   return out;
 }
 
@@ -419,6 +445,14 @@ function PE_defaultContributionPractices() {
 /* 病院の設定の初期値（C を使う・既定の実践例） */
 function PE_initialHospital() {
   return { useContribution: true, practices: PE_defaultContributionPractices(), seq: 0 };
+}
+
+/* C の項目の意味（画面に出す文）。説明文の {jobTypeName} を職種名（職種マスターの name）に置き換える。
+ * 職種名はコードに書かず、職種マスターから取る（R31）。戻り値はエスケープ前の文字列なので、画面では esc() を通すこと。 */
+function PE_contributionDescription(item, job) {
+  var text = (item && typeof item.description === 'string') ? item.description : '';
+  var name = (job && typeof job.name === 'string') ? job.name : '';
+  return text.split('{jobTypeName}').join(name);
 }
 
 /* C の項目IDから項目を引く。見つからなければ null */

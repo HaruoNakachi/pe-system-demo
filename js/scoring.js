@@ -13,8 +13,9 @@
  *  - 各個人の目標の領域スコアは、合意した目標ごとのスコア（その目標の実践例の平均）を
  *    目標ごとの重みで加重平均したもの（改訂方針D・R28）。有効な回答が0件の目標は外し、
  *    残りの目標で重みを再正規化する。他者評価も同じ計算方法で算出する。
- *  - 領域の重みは個人ごとの値（pe_demo_personal_weight）を使う。C を使わないときは C を除いて
- *    再正規化した値（PE_effectiveWeights）を呼び出し側から渡す（R30）。
+ *  - 領域の重みは個人ごとの値（pe_demo_personal_weight）を使う。C を使うとき・使わないときで別々に持ち、
+ *    C を使わないときは A・B・各個人の目標の3つ（未調整なら既定値から C を除いて再正規化した値）を
+ *    呼び出し側から渡す（PE_effectiveWeights。R30）。
  *  - レベル認定は B の実践ラダー・マネジメントラダー・C をそれぞれ判定する。A と各個人の目標は
  *    レベル認定を持たず、目標・重みの影響も受けない（R21・R27）。
  */
@@ -175,7 +176,8 @@ var PE_Scoring = (function () {
             domainName: PE_domainName('contribution', job),
             parentKind: 'C の項目',
             parentName: (citem.mark || '') + citem.name,
-            parentText: citem.description,
+            /* 説明文の {jobTypeName} に本人の職種名を差し込む（C③。R31） */
+            parentText: PE_contributionDescription(citem, job),
             contributionItemId: citem.id,
             categoryId: citem.category,
             categoryName: cat ? cat.name : '',
@@ -340,7 +342,7 @@ var PE_Scoring = (function () {
   /* 領域別スコア。本人評価・他者評価の両方を算出する。
    * options（任意）:
    *   weights: { basic, professional, contribution?, personal }  適用する領域の重み（R30）。
-   *            C を使わないときは再正規化済みの値（PE_effectiveWeights）を渡す。省略時は PE_DOMAINS の既定値
+   *            C を使わないときは3つの重み（PE_effectiveWeights）を渡す。省略時は PE_DOMAINS の既定値
    *   goals:   [{ id, weight }]   合意した目標と目標ごとの重み（R28）。
    *            渡した場合、各個人の目標の平均は目標ごとの加重平均になる。
    *   useContribution: C を使うか（R32）。false のとき C の行を作らない。省略時は true

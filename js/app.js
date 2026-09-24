@@ -16,7 +16,9 @@
     submitted: { submitted: false, at: null },
     /* 各個人の目標（改訂方針D）。{ goals: [{ id, text, source, weight, practiceItems: [{ id, text, source }] }], seq } */
     personalGoals: { goals: [], seq: 0 },
-    /* 個人ごとの4領域の重み（R30）。{ basic, professional, contribution, personal, updatedAt } */
+    /* 個人ごとの重み（R30）。C を使うとき・使わないときを別々に持つ。
+     * { withC: null | { basic, professional, contribution, personal, updatedAt },
+     *   withoutC: null | { basic, professional, personal, updatedAt } }。null は未調整（病院の既定値を使う） */
     personalWeight: null,
     /* 病院の設定（C。ABC 改訂・R32）。{ useContribution, practices: [{ id, itemId, level, text, source }], seq } */
     hospital: null
@@ -270,13 +272,11 @@
     if (typeof goals.seq !== 'number' || goals.seq < 0) goals.seq = 0;
     state.personalGoals = goals;
 
-    /* ABC 改訂前の3領域の重み（basic／professional／personal のみ）は4領域の形で検証を通らないため、
-     * ここで新しい既定値（40／35／15／10）に置き換える（移行。README に記載）。 */
-    var weight = PE_Storage.getJSON(PE_KEYS.personalWeight, null);
-    if (!isValidWeight(weight)) {
-      weight = PE_defaultPersonalWeight();
-      PE_Storage.setJSON(PE_KEYS.personalWeight, weight);
-    }
+    /* 個人ごとの重み。C を使うとき・使わないときを別々に持つ形（{ withC, withoutC }）に揃える。
+     * 旧形式からの移行は migrateWeight（README 14節）。形を変えたときだけ保存し直す。 */
+    var rawWeight = PE_Storage.getJSON(PE_KEYS.personalWeight, null);
+    var weight = migrateWeight(rawWeight);
+    if (JSON.stringify(weight) !== JSON.stringify(rawWeight)) PE_Storage.setJSON(PE_KEYS.personalWeight, weight);
     state.personalWeight = weight;
 
     /* 病院の設定（C。ABC 改訂で追加）。キーが無い・壊れているときは「C を使う・既定の実践例」で初期化する。 */
@@ -375,16 +375,42 @@
     return true;
   }
 
-  /* 4領域（A・B・C・各個人の目標）の重み。ABC 改訂前の3領域の形は通さない（初期化時に既定値へ置き換える） */
-  function isValidWeight(w) {
+  /* C を使うとき（4つ）／使わないとき（3つ）の重みが、整数・合計100 の形になっているか */
+  function isValidWeightPart(w, useContribution) {
     if (!w || typeof w !== 'object') return false;
-    var sum = 0;
-    for (var i = 0; i < PE_DOMAINS.length; i++) {
-      var v = w[PE_DOMAINS[i].id];
+    var list = PE_weightDomains(useContribution), sum = 0;
+    for (var i = 0; i < list.length; i++) {
+      var v = w[list[i].id];
       if (!isPercentInt(v)) return false;
       sum += v;
     }
     return sum === 100;
+  }
+
+  /* 検証済みの重みを、そのときの領域だけの新しいオブジェクトにして返す（余分なキーを持ち込まない） */
+  function copyWeightPart(w, useContribution) {
+    var list = PE_weightDomains(useContribution), out = {};
+    for (var i = 0; i < list.length; i++) out[list[i].id] = w[list[i].id];
+    if (typeof w.updatedAt === 'string') out.updatedAt = w.updatedAt;
+    return out;
+  }
+
+  /* 保存されている重みを新しい形（{ withC, withoutC }）に揃える。
+   *  - 新しい形：それぞれを検証し、壊れている側だけ未調整（null）に戻す。
+   *  - 修正前の形（4領域がトップレベルにある { basic, professional, contribution, personal }）：
+   *    「C を使うとき」の重みとして引き継ぎ、「C を使わないとき」は未調整とする。
+   *  - ABC 改訂前の3領域の形・キーが無い・壊れている：どちらも未調整（病院の既定値）とする
+   *    （3領域の旧データを既定値に置き換える扱いは、ABC 改訂の反映時から変えていない）。 */
+  function migrateWeight(raw) {
+    var out = PE_initialPersonalWeight();
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    if (Object.prototype.hasOwnProperty.call(raw, 'withC') || Object.prototype.hasOwnProperty.call(raw, 'withoutC')) {
+      if (isValidWeightPart(raw.withC, true)) out.withC = copyWeightPart(raw.withC, true);
+      if (isValidWeightPart(raw.withoutC, false)) out.withoutC = copyWeightPart(raw.withoutC, false);
+      return out;
+    }
+    if (isValidWeightPart(raw, true)) out.withC = copyWeightPart(raw, true);
+    return out;
   }
 
   /* 保存に失敗した場合は、その場で「保存できない」バナーを出し直す。 */
@@ -433,9 +459,33 @@
     return !!(state.hospital && state.hospital.useContribution);
   }
 
-  /* 集計に使う領域の重み。C を使わないときは C を除いて再正規化した値（R30） */
+  /* 集計に使う領域の重み（R30）。表示中の状態（C を使う／使わない）の個人の重み、未調整なら病院の既定値。
+   * C を使わないときの既定値は、C を除いて再正規化した正確な比（小数）である。 */
   function effectiveWeights() {
     return PE_effectiveWeights(state.personalWeight, useC());
+  }
+
+  /* 表示中の状態の、病院の既定値（C を使う：40／35／15／10、使わない：47.1／41.2／11.8 の正確な比） */
+  function defaultWeightsNow() {
+    return PE_defaultWeightsFor(useC());
+  }
+
+  /* 表示中の状態の重みが、個人で調整されているか。
+   * C を使うとき：保存値があり、既定値と1つでも違う。C を使わないとき：3つの整数の保存値がある
+   * （既定値の再正規化した比は整数にならないため、保存値があれば既定値とは違う）。 */
+  function isWeightAdjusted() {
+    var part = state.personalWeight ? state.personalWeight[PE_weightKey(useC())] : null;
+    if (!part) return false;
+    var def = defaultWeightsNow(), list = PE_weightDomains(useC());
+    for (var i = 0; i < list.length; i++) {
+      if (part[list[i].id] !== def[list[i].id]) return true;
+    }
+    return false;
+  }
+
+  /* 表示中の状態の名前（「C を使うとき」／「C を使わないとき」） */
+  function weightStateName(useContribution) {
+    return useContribution ? 'C を使うとき' : 'C を使わないとき';
   }
 
   /* 病院の C の実践例のうち、指定したレベルのもの */
@@ -515,19 +565,24 @@
     return parts.join('／');
   }
 
-  /* C を使わないときの再正規化の説明（R30）。C を使うときは空文字 */
+  /* C を使わないときの重みの説明（R30）。C を使うときは空文字 */
   function renormalizeNote() {
     if (useC()) return '';
-    var cw = state.personalWeight.contribution;
-    return 'この病院は C を使わない設定のため、C の重み（' + fmtPct(cw) + '％）を除き、残りの比率を保ったまま合計100％に'
+    if (isWeightAdjusted()) {
+      return 'この病院は C を使わない設定のため、A・B・各個人の目標の3つの重み（' + weightLabel(effectiveWeights())
+        + '）で集計しています（この方に合わせて調整した値）。';
+    }
+    return 'この病院は C を使わない設定のため、病院の既定値（' + weightShort(PE_defaultPersonalWeight())
+      + '）から C の重み（' + fmtPct(PE_defaultPersonalWeight().contribution) + '％）を除き、残りの比率を保ったまま合計100％に'
       + '再正規化しています（' + weightLabel(effectiveWeights()) + '）。';
   }
 
-  function isDefaultWeight(w) {
-    for (var i = 0; i < PE_DOMAINS.length; i++) {
-      if (w[PE_DOMAINS[i].id] !== PE_DOMAINS[i].weight) return false;
-    }
-    return true;
+  /* 小数1桁の表示を足すと100にならないときの注記（再正規化した既定値のとき。例 47.1＋41.2＋11.8＝100.1） */
+  function roundingNote(w) {
+    var sum = 0;
+    for (var k in w) if (Object.prototype.hasOwnProperty.call(w, k) && typeof w[k] === 'number') sum += Math.round(w[k] * 10) / 10;
+    sum = Math.round(sum * 10) / 10;
+    return sum === 100 ? '' : '表示は小数1桁に丸めているため、足すと' + fmtPct(sum) + 'になります。集計には正確な比を使います。';
   }
 
   /* 目標が総合スコアに占める割合（％）＝ 目標ごとの重み × 各個人の目標の重み（適用後）÷ 100 */
@@ -774,12 +829,14 @@
     return (v >= 0 && v <= 100) ? v : null;
   }
 
+  /* 表示中の状態の重みの入力欄（C を使う：4つ／使わない：3つ）を読む */
   function readDomainWeightInputs() {
     var out = { values: {}, sum: 0, invalid: false };
-    for (var i = 0; i < PE_DOMAINS.length; i++) {
-      var v = readPercentInput(document.getElementById('dw-' + PE_DOMAINS[i].id));
+    var list = PE_weightDomains(useC());
+    for (var i = 0; i < list.length; i++) {
+      var v = readPercentInput(document.getElementById('dw-' + list[i].id));
       if (v === null) out.invalid = true;
-      else { out.values[PE_DOMAINS[i].id] = v; out.sum += v; }
+      else { out.values[list[i].id] = v; out.sum += v; }
     }
     return out;
   }
@@ -802,26 +859,36 @@
     el.textContent = text || '';
   }
 
+  /* 表示中の状態（C を使う／使わない）の重みだけを保存する。もう一方の重みは変えない */
   function saveDomainWeights() {
+    var on = useC();
     var r = readDomainWeightInputs();
-    var keep = '保存していません。保存済みの重み（' + weightLabel(state.personalWeight) + '）のままです。';
+    var keep = '保存していません。適用中の重み（' + weightLabel(effectiveWeights()) + '）のままです。';
     if (r.invalid) { showFieldError('domain-weight-error', '各値は 0〜100 の整数で入力してください。' + keep); return false; }
     if (r.sum !== 100) { showFieldError('domain-weight-error', '合計が100％になっていません（現在 ' + r.sum + '％）。' + keep); return false; }
-    var w = {};
-    for (var i = 0; i < PE_DOMAINS.length; i++) w[PE_DOMAINS[i].id] = r.values[PE_DOMAINS[i].id];
+    var list = PE_weightDomains(on), w = {};
+    for (var i = 0; i < list.length; i++) w[list[i].id] = r.values[list[i].id];
     w.updatedAt = new Date().toISOString();
-    state.personalWeight = w;
+    state.personalWeight[PE_weightKey(on)] = w;
     savePersonalWeight();
-    goalFlash = { type: 'ok', text: '4領域の重みを保存しました（' + weightLabel(w) + '）。' + renormalizeNote() };
+    goalFlash = {
+      type: 'ok',
+      text: weightStateName(on) + 'の重みを保存しました（' + weightLabel(w) + '）。'
+        + weightStateName(!on) + 'の重みは別に保存しており、変わりません。'
+    };
     return true;
   }
 
+  /* 表示中の状態の重みだけを既定値に戻す（未調整に戻す）。もう一方の重みは変えない */
   function resetDomainWeights() {
-    var w = PE_defaultPersonalWeight();
-    w.updatedAt = new Date().toISOString();
-    state.personalWeight = w;
+    var on = useC();
+    state.personalWeight[PE_weightKey(on)] = null;
     savePersonalWeight();
-    goalFlash = { type: 'ok', text: '4領域の重みを既定値（' + weightLabel(w) + '）に戻しました。' + renormalizeNote() };
+    goalFlash = {
+      type: 'ok',
+      text: weightStateName(on) + 'の重みを既定値（' + weightLabel(effectiveWeights()) + '）に戻しました。'
+        + weightStateName(!on) + 'の重みは変わりません。'
+    };
   }
 
   function saveGoalWeights() {
@@ -1315,9 +1382,9 @@
     if (!useC()) {
       html += '<p class="notice notice-info">' + esc(renormalizeNote()) + '</p>';
     }
-    /* 既定値から調整されている場合は、開閉の外（常に見える位置）に一言出す */
-    if (!isDefaultWeight(state.personalWeight)) {
-      html += '<p class="notice notice-info">この方の重みは既定値（' + esc(weightShort(PE_defaultPersonalWeight()))
+    /* 表示中の状態（C を使う／使わない）の重みが既定値から調整されている場合は、開閉の外（常に見える位置）に一言出す */
+    if (isWeightAdjusted()) {
+      html += '<p class="notice notice-info">この方の重みは既定値（' + esc(weightShort(defaultWeightsNow()))
         + '）から調整されています。</p>';
     }
     html += explainBlock('weights', '重みの内訳について', weightsExplainHtml());
@@ -1563,14 +1630,15 @@
 
   /* 重み付き総合スコアの説明（開閉の中身）。この方に適用されている重みを示す。 */
   function weightsExplainHtml() {
-    var w = state.personalWeight;
     var def = PE_defaultPersonalWeight();
     var goals = state.personalGoals.goals;
     var html = '<p class="notice notice-warn">病院の既定値は ' + esc(weightLabel(def)) + 'です。'
-      + 'これは<strong>暫定値</strong>であり、試行運用の結果をふまえて確定します。</p>'
-      + '<p class="hint">この方に設定されている重みは <strong>' + esc(weightLabel(w)) + '</strong> です'
-      + (isDefaultWeight(w) ? '（既定値のまま）。' : '（既定値から調整）。')
-      + '個人ごとの重みは上位職または病院内管理者が調整します。</p>'
+      + 'これは<strong>暫定値</strong>であり、試行運用の結果をふまえて確定します。'
+      + 'C を使わない病院では A・B・各個人の目標の3つで合計100％とし、既定値は C を除いて再正規化した値です。</p>'
+      + '<p class="hint">この方に適用されている重み（' + esc(weightStateName(useC())) + '）は <strong>'
+      + esc(weightLabel(effectiveWeights())) + '</strong> です'
+      + (isWeightAdjusted() ? '（既定値から調整）。' : '（既定値のまま）。')
+      + '個人ごとの重みは上位職または病院内管理者が調整し、C を使うとき・使わないときで別々に持ちます。</p>'
       + (useC() ? '' : '<p class="hint">' + esc(renormalizeNote()) + '</p>')
       + '<p class="hint">重み付き総合スコア ＝ Σ（領域別スコア × 適用している重み）÷ 適用している重みの合計。'
       + 'A・B・C は性質が異なるため、領域別スコアを並べたうえで重みで合成しています。</p>';
@@ -1661,8 +1729,7 @@
 
   /* マイページ：合意した目標と適用されている重み（参照のみ） */
   function viewMypageGoals() {
-    var w = state.personalWeight;
-    var def = PE_defaultPersonalWeight();
+    var def = defaultWeightsNow();
     var goals = state.personalGoals.goals;
     var html = '<section class="card">'
       + '<h2>各個人の目標と重み</h2>'
@@ -1676,11 +1743,15 @@
       var id = PE_DOMAINS[i].id;
       html += '<tr><td>' + esc(domainTitle(id)) + '</td>'
         + '<td class="num">' + (typeof eff[id] === 'number' ? esc(fmtPct(eff[id])) + '％' : '使わない') + '</td>'
-        + '<td class="num">' + esc(def[id]) + '％</td></tr>';
+        + '<td class="num">' + (typeof def[id] === 'number' ? esc(fmtPct(def[id])) + '％' : '—') + '</td></tr>';
     }
     html += '</tbody></table></div>';
-    if (!useC()) html += '<p class="notice notice-info">' + esc(renormalizeNote()) + '</p>';
-    if (!isDefaultWeight(w)) {
+    if (!useC()) {
+      var rn = roundingNote(isWeightAdjusted() ? def : eff);
+      html += '<p class="notice notice-info">' + esc(renormalizeNote()) + '</p>'
+        + (rn ? '<p class="hint">' + esc(rn) + '</p>' : '');
+    }
+    if (isWeightAdjusted()) {
       html += '<p class="notice notice-info">この方の重みは既定値（' + esc(weightShort(def)) + '）から調整されています。</p>';
     }
     html += '<h3 class="sub-heading">合意した目標（' + goals.length + '件）</h3>';
@@ -1822,7 +1893,7 @@
    * 本番では合意した目標は面談で決め、重みは上位職または病院内管理者が設定する。
    * デモでは挙動を確認するため、既存の設定項目と同じ扱いでここに置く。 */
   function viewPersonalGoalSettings(d) {
-    var w = state.personalWeight;
+    var w = effectiveWeights();
     var goals = state.personalGoals.goals;
     var flash = goalFlash;
     goalFlash = null;
@@ -1837,31 +1908,42 @@
       html += '<p class="notice notice-ok goal-flash" role="status">' + esc(flash.text) + '</p>';
     }
 
-    /* 4領域の重み */
-    html += '<h3 class="sub-heading">4領域の重み</h3>'
+    /* 評価領域の重み。表示中の状態（C を使う：4つ／使わない：3つ）の入力欄だけを出す（R30） */
+    var on = useC();
+    var wList = PE_weightDomains(on);
+    var adjusted = isWeightAdjusted();
+    var defNow = defaultWeightsNow();
+    html += '<h3 class="sub-heading">評価領域の重み（' + esc(weightStateName(on)) + '・' + wList.length + 'つ）</h3>'
       + '<p class="hint">病院の既定値（' + esc(weightLabel(PE_defaultPersonalWeight())) + '・暫定値）に、個人ごとの調整を重ねます。'
-      + '各値は 0〜100 の整数で、合計を100％にしてください。</p>';
-    if (!useC()) {
-      html += '<p class="notice notice-info">' + esc(renormalizeNote())
-        + '下の C の値は、C を使う設定に戻したときに使います。</p>';
+      + (on
+        ? 'この病院は C を使う設定のため、A・B・C・各個人の目標の4つで合計100％にします。'
+        : 'この病院は C を使わない設定のため、A・B・各個人の目標の3つで合計100％にします。')
+      + '調整するときは、各値を 0〜100 の整数で入れ、合計を100％にしてください。</p>'
+      + '<p class="hint">C を使うときの重みと使わないときの重みは別々に保存します。'
+      + '「' + esc(domainTitle('contribution')) + '（病院の設定・デモ用）」で切り替えても、もう一方の重みは消えません。</p>';
+    if (!on && !adjusted) {
+      html += '<p class="notice notice-info">個人で調整していないため、病院の既定値から C を除いて再正規化した値'
+        + '（' + esc(weightLabel(defNow)) + '）を適用しています。' + esc(roundingNote(defNow)) + '</p>';
     }
     html += '<div class="weight-grid">';
-    for (var i = 0; i < PE_DOMAINS.length; i++) {
-      var dm = PE_DOMAINS[i];
+    for (var i = 0; i < wList.length; i++) {
+      var dm = wList[i];
       html += '<div class="weight-field">'
         + '<label for="dw-' + esc(dm.id) + '">' + esc(domainTitle(dm.id)) + '</label>'
         + '<span class="weight-input"><input type="number" inputmode="numeric" min="0" max="100" step="1"'
-        + ' id="dw-' + esc(dm.id) + '" data-role="domain-weight" value="' + esc(w[dm.id]) + '"><span aria-hidden="true">％</span></span>'
+        + ' id="dw-' + esc(dm.id) + '" data-role="domain-weight" value="' + esc(fmtPct(w[dm.id])) + '"><span aria-hidden="true">％</span></span>'
         + '</div>';
     }
     html += '</div>'
-      + '<p class="weight-sum" id="domain-weight-sum">合計 ' + sumDomainWeights(w) + '％</p>'
+      + '<p class="weight-sum" id="domain-weight-sum">合計 ' + esc(fmtPct(sumDomainWeights(w))) + '％'
+      + (adjusted || on ? '' : '（小数1桁に丸めた表示の合計。集計には正確な比を使います）') + '</p>'
       + '<p class="form-error" id="domain-weight-error" role="alert" hidden></p>'
       + '<div class="btn-row">'
-      + '<button type="button" class="btn btn-primary" data-action="domain-weights-save">4領域の重みを保存</button>'
-      + '<button type="button" class="btn" data-action="domain-weights-default">既定値（' + esc(weightShort(PE_defaultPersonalWeight())) + '）に戻す</button>'
+      + '<button type="button" class="btn btn-primary" data-action="domain-weights-save">' + esc(weightStateName(on)) + 'の重みを保存</button>'
+      + '<button type="button" class="btn" data-action="domain-weights-default">既定値（' + esc(weightShort(defNow)) + '）に戻す</button>'
       + '</div>'
-      + '<p class="hint">現在の状態：' + (isDefaultWeight(w) ? '既定値のまま' : '<strong>既定値から調整されています</strong>') + '</p>';
+      + '<p class="hint">現在の状態（' + esc(weightStateName(on)) + '）：'
+      + (adjusted ? '<strong>既定値から調整されています</strong>' : '既定値のまま') + '</p>';
 
     /* 合意した目標の一覧 */
     html += '<h3 class="sub-heading">合意した目標（' + goals.length + '件）</h3>'
@@ -1907,10 +1989,14 @@
     return html;
   }
 
+  /* 入力欄に出している値（小数1桁に丸めた値）の合計 */
   function sumDomainWeights(w) {
     var s = 0;
-    for (var i = 0; i < PE_DOMAINS.length; i++) s += (typeof w[PE_DOMAINS[i].id] === 'number') ? w[PE_DOMAINS[i].id] : 0;
-    return s;
+    for (var i = 0; i < PE_DOMAINS.length; i++) {
+      var v = w[PE_DOMAINS[i].id];
+      s += (typeof v === 'number') ? Math.round(v * 10) / 10 : 0;
+    }
+    return Math.round(s * 10) / 10;
   }
 
   function sumGoalWeights() {
@@ -2075,7 +2161,8 @@
     saveHospital();
     cFlash = {
       text: on
-        ? 'C を使う設定にしました。C の回答対象・チャレンジレベル・レベル認定・チャートを表示し、重みは4領域で集計します。'
+        ? 'C を使う設定にしました。C の回答対象・チャレンジレベル・レベル認定・チャートを表示し、'
+          + '重みは C を使うときの4つ（' + weightLabel(effectiveWeights()) + '）で集計します。'
         : 'C を使わない設定にしました。C の回答対象・チャレンジレベル・レベル認定・チャートは出しません。' + renormalizeNote()
           + 'C の回答は消さずに残しています。'
     };
@@ -2098,7 +2185,8 @@
       + segButton('cuse', 'false', '使わない', !useC())
       + '</div>'
       + '<p class="hint">使わないにすると、C の回答対象・チャレンジレベル・レベル認定・チャート・領域別スコアの行を出さず、'
-      + '重みは C の分を除いて残りの比率を保ったまま再正規化します。C の回答は消さずに残し、「使う」に戻すと再び表示されます。</p>';
+      + '重みは C を使わないときの3つ（A・B・各個人の目標。個人で調整していなければ、既定値から C を除いて再正規化した値）で集計します。'
+      + 'C の回答と、C を使うときの重みは消さずに残し、「使う」に戻すと再び使います。</p>';
 
     html += '<h3 class="sub-heading">C の実践例</h3>'
       + '<p class="hint">C の項目（' + C.items.length + 'つ）の名前と意味は全病院共通で、編集できません。'
@@ -2130,7 +2218,7 @@
       var list = cPracticesAt(level, item.id);
       html += '<div class="goal-panel c-item-panel">'
         + '<p class="goal-text">' + esc((item.mark || '') + item.name) + '</p>'
-        + '<p class="goal-weight-note">' + esc(item.description) + '</p>'
+        + '<p class="goal-weight-note">' + esc(PE_contributionDescription(item, currentJob())) + '</p>'
         + '<p class="goal-items-title">' + esc(PE_Scoring.levelLabel(level)) + ' の実践例（' + list.length + '件）</p>';
       if (list.length === 0) html += '<p class="empty">この項目には ' + esc(PE_Scoring.levelLabel(level)) + ' の実践例がありません。</p>';
       html += '<ul class="c-practice-list">';

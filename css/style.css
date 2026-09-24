@@ -811,7 +811,7 @@ summary:focus-visible {
 
 .weight-grid {
   display: grid;
-  /* ABC 改訂で4領域になった。狭い幅では折り返す */
+  /* ABC 改訂で4領域（C を使わないときは3つ）になった。狭い幅では折り返す */
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
   margin-top: 10px;
